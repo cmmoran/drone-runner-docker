@@ -54,6 +54,7 @@ type (
 		RunPolicy    runtime.RunPolicy `json:"run_policy,omitempty"`
 		Secrets      []*Secret         `json:"secrets,omitempty"`
 		ShmSize      int64             `json:"shm_size,omitempty"`
+		StopGrace    int               `json:"stop_grace,omitempty"`
 		User         string            `json:"user,omitempty"`
 		Volumes      []*VolumeMount    `json:"volumes,omitempty"`
 		WorkingDir   string            `json:"working_dir,omitempty"`

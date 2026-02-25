@@ -14,6 +14,9 @@ import (
 
 // returns a container configuration.
 func toConfig(spec *Spec, step *Step) *container.Config {
+	if step.StopGrace == 0 {
+		step.StopGrace = 1
+	}
 	config := &container.Config{
 		Image:        step.Image,
 		Labels:       step.Labels,
@@ -26,6 +29,7 @@ func toConfig(spec *Spec, step *Step) *container.Config {
 		OpenStdin:    false,
 		StdinOnce:    false,
 		ArgsEscaped:  false,
+		StopTimeout:  &step.StopGrace,
 	}
 
 	if len(step.Envs) != 0 {
