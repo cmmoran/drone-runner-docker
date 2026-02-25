@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/cmmoran/envconfig"
 	"github.com/joho/godotenv"
-	"github.com/kelseyhightower/envconfig"
 )
 
 // Config stores the system configuration.
