@@ -2,6 +2,7 @@
 // Use of this source code is governed by the Polyform License
 // that can be found in the LICENSE file.
 
+//go:build !windows
 // +build !windows
 
 package compiler
@@ -138,7 +139,7 @@ func TestCompile_Secrets(t *testing.T) {
 	if diff := cmp.Diff(got, want); len(diff) != 0 {
 		// TODO(bradrydzewski) ordering is not guaranteed. this
 		// unit tests needs to be adjusted accordingly.
-		t.Skipf(diff)
+		t.Skipf("%s", diff)
 	}
 }
 
@@ -234,7 +235,7 @@ func TestCompile_StepLabels(t *testing.T) {
 	}
 
 	if diff := cmp.Diff(gotLabels, wantLabels); len(diff) != 0 {
-		t.Errorf(diff)
+		t.Errorf("%s", diff)
 	}
 
 }
@@ -298,7 +299,7 @@ func testCompile(t *testing.T, source, golden string) *engine.Spec {
 		cmpopts.IgnoreFields(engine.VolumeEmptyDir{}, "Labels"),
 	}
 	if diff := cmp.Diff(got, want, opts...); len(diff) != 0 {
-		t.Errorf(diff)
+		t.Errorf("%s", diff)
 	}
 
 	return got.(*engine.Spec)

@@ -60,7 +60,7 @@ func TestClone(t *testing.T) {
 	got := c.Compile(nocontext, args).(*engine.Spec)
 	ignore := cmpopts.IgnoreFields(engine.Step{}, "Envs", "Labels")
 	if diff := cmp.Diff(got.Steps, want, ignore); len(diff) != 0 {
-		t.Errorf(diff)
+		t.Errorf("%s", diff)
 	}
 }
 
@@ -95,7 +95,7 @@ func TestCloneCreate(t *testing.T) {
 	src := &resource.Pipeline{Clone: manifest.Clone{Depth: 50}}
 	got := createClone(src)
 	if diff := cmp.Diff(got, want); len(diff) != 0 {
-		t.Errorf(diff)
+		t.Errorf("%s", diff)
 	}
 }
 

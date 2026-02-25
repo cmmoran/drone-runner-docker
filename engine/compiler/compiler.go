@@ -127,7 +127,7 @@ type Compiler struct {
 // Compile compiles the configuration file.
 func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runtime.Spec {
 	pipeline := args.Pipeline.(*resource.Pipeline)
-	os := pipeline.Platform.OS
+	osVal := pipeline.Platform.OS
 
 	// create the workspace paths
 	base, path, full := createWorkspace(pipeline)
@@ -311,7 +311,7 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		dst.Envs = environ.Combine(envs, dst.Envs)
 		dst.Volumes = append(dst.Volumes, mount)
 		dst.Labels = stageLabels
-		setupScript(src, dst, os)
+		setupScript(src, dst, osVal)
 		setupWorkdir(src, dst, full)
 		spec.Steps = append(spec.Steps, dst)
 
@@ -332,7 +332,7 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		dst.Envs = environ.Combine(envs, dst.Envs)
 		dst.Volumes = append(dst.Volumes, mount)
 		dst.Labels = stageLabels
-		setupScript(src, dst, os)
+		setupScript(src, dst, osVal)
 		setupWorkdir(src, dst, full)
 		spec.Steps = append(spec.Steps, dst)
 
@@ -394,10 +394,10 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 	var secretData [][]byte
 	for _, step := range spec.Steps {
 		for _, s := range step.Secrets {
-			secret, ok := c.findSecret(ctx, args, s.Name)
+			secretValue, ok := c.findSecret(ctx, args, s.Name)
 			if ok {
-				s.Data = []byte(secret)
-				secretData = append(secretData, []byte(secret))
+				s.Data = []byte(secretValue)
+				secretData = append(secretData, []byte(secretValue))
 			}
 		}
 	}
@@ -424,9 +424,9 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 
 	// get registry credentials from secrets
 	for _, name := range pipeline.PullSecrets {
-		secret, ok := c.findSecret(ctx, args, name)
+		secretValue, ok := c.findSecret(ctx, args, name)
 		if ok {
-			parsed, err := auths.ParseString(secret)
+			parsed, err := auths.ParseString(secretValue)
 			if err == nil {
 				creds = append(parsed, creds...)
 			}
@@ -497,7 +497,7 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		id := random()
 		ro := strings.HasSuffix(v, ":ro")
 		v = strings.TrimSuffix(v, ":ro")
-		volume := &engine.Volume{
+		volume = &engine.Volume{
 			HostPath: &engine.VolumeHostPath{
 				ID:       id,
 				Name:     id,
@@ -507,7 +507,7 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		}
 		spec.Volumes = append(spec.Volumes, volume)
 		for _, step := range spec.Steps {
-			mount := &engine.VolumeMount{
+			mount = &engine.VolumeMount{
 				Name: id,
 				Path: v,
 			}
@@ -600,16 +600,16 @@ func (c *Compiler) findSecret(ctx context.Context, args runtime.CompilerArgs, na
 		return
 	}
 
-	// source secrets from the global secret provider
-	// and the repository secret provider.
-	provider := secret.Combine(
+	// source secrets from the global secret providerValue
+	// and the repository secret providerValue.
+	providerValue := secret.Combine(
 		args.Secret,
 		c.Secret,
 	)
 
-	// TODO return an error to the caller if the provider
+	// TODO return an error to the caller if the providerValue
 	// returns an error.
-	found, _ := provider.Find(ctx, &secret.Request{
+	found, _ := providerValue.Find(ctx, &secret.Request{
 		Name:  name,
 		Build: args.Build,
 		Repo:  args.Repo,

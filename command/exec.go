@@ -97,14 +97,14 @@ func (c *execCommand) run(*kingpin.ParseContext) error {
 	}
 
 	// parse and lint the configuration.
-	manifest, err := manifest.ParseString(config)
+	mfst, err := manifest.ParseString(config)
 	if err != nil {
 		return err
 	}
 
 	// a configuration can contain multiple pipelines.
 	// get a specific pipeline resource for execution.
-	res, err := resource.Lookup(c.Stage.Name, manifest)
+	res, err := resource.Lookup(c.Stage.Name, mfst)
 	if err != nil {
 		return err
 	}
@@ -141,7 +141,7 @@ func (c *execCommand) run(*kingpin.ParseContext) error {
 
 	args := runtime.CompilerArgs{
 		Pipeline: res,
-		Manifest: manifest,
+		Manifest: mfst,
 		Build:    c.Build,
 		Netrc:    c.Netrc,
 		Repo:     c.Repo,
@@ -231,7 +231,7 @@ func (c *execCommand) run(*kingpin.ParseContext) error {
 		),
 	)
 
-	engine, err := engine.NewEnv(engine.Opts{})
+	eng, err := engine.NewEnv(engine.Opts{})
 	if err != nil {
 		return err
 	}
@@ -240,7 +240,7 @@ func (c *execCommand) run(*kingpin.ParseContext) error {
 		pipeline.NopReporter(),
 		console.New(c.Pretty),
 		pipeline.NopUploader(),
-		engine,
+		eng,
 		c.Procs,
 	).Exec(ctx, spec, state)
 
@@ -260,7 +260,7 @@ func (c *execCommand) run(*kingpin.ParseContext) error {
 func dump(v interface{}) {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	enc.Encode(v)
+	_ = enc.Encode(v)
 }
 
 func registerExec(app *kingpin.Application) {

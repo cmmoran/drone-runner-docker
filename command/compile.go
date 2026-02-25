@@ -77,14 +77,14 @@ func (c *compileCommand) run(*kingpin.ParseContext) error {
 	}
 
 	// parse and lint the configuration
-	manifest, err := manifest.ParseString(config)
+	parsedManifest, err := manifest.ParseString(config)
 	if err != nil {
 		return err
 	}
 
 	// a configuration can contain multiple pipelines.
 	// get a specific pipeline resource for execution.
-	resource, err := resource.Lookup(c.Stage.Name, manifest)
+	resolvedResource, err := resource.Lookup(c.Stage.Name, parsedManifest)
 	if err != nil {
 		return err
 	}
@@ -92,7 +92,7 @@ func (c *compileCommand) run(*kingpin.ParseContext) error {
 	// lint the pipeline and return an error if any
 	// linting rules are broken
 	lint := linter.New()
-	err = lint.Lint(resource, c.Repo)
+	err = lint.Lint(resolvedResource, c.Repo)
 	if err != nil {
 		return err
 	}
@@ -120,8 +120,8 @@ func (c *compileCommand) run(*kingpin.ParseContext) error {
 	}
 
 	args := runtime.CompilerArgs{
-		Pipeline: resource,
-		Manifest: manifest,
+		Pipeline: resolvedResource,
+		Manifest: parsedManifest,
 		Build:    c.Build,
 		Netrc:    c.Netrc,
 		Repo:     c.Repo,
@@ -135,8 +135,7 @@ func (c *compileCommand) run(*kingpin.ParseContext) error {
 	// console for inspection.
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	enc.Encode(spec)
-	return nil
+	return enc.Encode(spec)
 }
 
 func registerCompile(app *kingpin.Application) {
