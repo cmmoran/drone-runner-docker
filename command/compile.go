@@ -7,7 +7,7 @@ package command
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"strings"
 
@@ -43,7 +43,7 @@ type compileCommand struct {
 }
 
 func (c *compileCommand) run(*kingpin.ParseContext) error {
-	rawsource, err := ioutil.ReadAll(c.Source)
+	rawsource, err := io.ReadAll(c.Source)
 	if err != nil {
 		return err
 	}

@@ -7,24 +7,23 @@ package engine
 import (
 	"context"
 	"io"
-	"io/ioutil"
 	"os"
 	"time"
 
 	"github.com/drone-runners/drone-runner-docker/internal/docker/errors"
-	"github.com/drone-runners/drone-runner-docker/internal/docker/image"
+	droneimage "github.com/drone-runners/drone-runner-docker/internal/docker/image"
 	"github.com/drone-runners/drone-runner-docker/internal/docker/jsonmessage"
 	"github.com/drone-runners/drone-runner-docker/internal/docker/stdcopy"
 	"github.com/drone/runner-go/logger"
 	"github.com/drone/runner-go/pipeline/runtime"
 	"github.com/drone/runner-go/registry/auths"
 
-	"github.com/docker/docker/api/types"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
-	"github.com/docker/docker/errdefs"
 )
 
 // Opts configures the Docker engine.
@@ -87,7 +86,7 @@ func (e *Docker) Setup(ctx context.Context, specv runtime.Spec) error {
 	if spec.Platform.OS == "windows" {
 		driver = "nat"
 	}
-	_, err := e.client.NetworkCreate(ctx, spec.Network.ID, types.NetworkCreate{
+	_, err := e.client.NetworkCreate(ctx, spec.Network.ID, network.CreateOptions{
 		Driver:  driver,
 		Options: spec.Network.Options,
 		Labels:  spec.Network.Labels,
@@ -95,7 +94,7 @@ func (e *Docker) Setup(ctx context.Context, specv runtime.Spec) error {
 
 	// launches the inernal setup steps
 	for _, step := range spec.Internal {
-		if err := e.create(ctx, spec, step, ioutil.Discard); err != nil {
+		if err := e.create(ctx, spec, step, io.Discard); err != nil {
 			logger.FromContext(ctx).
 				WithError(err).
 				WithField("container", step.ID).
@@ -129,7 +128,7 @@ func (e *Docker) Setup(ctx context.Context, specv runtime.Spec) error {
 func (e *Docker) Destroy(ctx context.Context, specv runtime.Spec) error {
 	spec := specv.(*Spec)
 
-	removeOpts := types.ContainerRemoveOptions{
+	removeOpts := container.RemoveOptions{
 		Force:         true,
 		RemoveLinks:   false,
 		RemoveVolumes: true,
@@ -137,7 +136,7 @@ func (e *Docker) Destroy(ctx context.Context, specv runtime.Spec) error {
 
 	// stop all containers
 	for _, step := range append(spec.Steps, spec.Internal...) {
-		if err := e.client.ContainerKill(ctx, step.ID, "9"); err != nil && !client.IsErrNotFound(err) && !errdefs.IsConflict(err) {
+		if err := e.client.ContainerKill(ctx, step.ID, "9"); err != nil && !cerrdefs.IsNotFound(err) && !cerrdefs.IsConflict(err) {
 			logger.FromContext(ctx).
 				WithError(err).
 				WithField("container", step.ID).
@@ -147,7 +146,7 @@ func (e *Docker) Destroy(ctx context.Context, specv runtime.Spec) error {
 
 	// cleanup all containers
 	for _, step := range append(spec.Steps, spec.Internal...) {
-		if err := e.client.ContainerRemove(ctx, step.ID, removeOpts); err != nil && !client.IsErrNotFound(err) {
+		if err := e.client.ContainerRemove(ctx, step.ID, removeOpts); err != nil && !cerrdefs.IsNotFound(err) {
 			logger.FromContext(ctx).
 				WithError(err).
 				WithField("container", step.ID).
@@ -231,7 +230,7 @@ func (e *Docker) Run(ctx context.Context, specv runtime.Spec, stepv runtime.Step
 
 func (e *Docker) create(ctx context.Context, spec *Spec, step *Step, output io.Writer) error {
 	// create pull options with encoded authorization credentials.
-	pullopts := types.ImagePullOptions{}
+	pullopts := image.PullOptions{}
 	if step.Auth != nil {
 		pullopts.RegistryAuth = auths.Header(
 			step.Auth.Username,
@@ -242,15 +241,15 @@ func (e *Docker) create(ctx context.Context, spec *Spec, step *Step, output io.W
 	// automatically pull the latest version of the image if requested
 	// by the process configuration, or if the image is :latest
 	if step.Pull == PullAlways ||
-		(step.Pull == PullDefault && image.IsLatest(step.Image)) {
+		(step.Pull == PullDefault && droneimage.IsLatest(step.Image)) {
 		rc, pullerr := e.client.ImagePull(ctx, step.Image, pullopts)
 		if pullerr == nil {
 			if e.hidePull {
-				io.Copy(ioutil.Discard, rc)
+				_, _ = io.Copy(io.Discard, rc)
 			} else {
-				jsonmessage.Copy(rc, output)
+				_ = jsonmessage.Copy(rc, output)
 			}
-			rc.Close()
+			_ = rc.Close()
 		}
 		if pullerr != nil {
 			return pullerr
@@ -267,14 +266,14 @@ func (e *Docker) create(ctx context.Context, spec *Spec, step *Step, output io.W
 
 	// automatically pull and try to re-create the image if the
 	// failure is caused because the image does not exist.
-	if client.IsErrNotFound(err) && step.Pull != PullNever {
+	if cerrdefs.IsNotFound(err) && step.Pull != PullNever {
 		rc, pullerr := e.client.ImagePull(ctx, step.Image, pullopts)
 		if pullerr != nil {
 			return pullerr
 		}
 
 		if e.hidePull {
-			io.Copy(ioutil.Discard, rc)
+			io.Copy(io.Discard, rc)
 		} else {
 			jsonmessage.Copy(rc, output)
 		}
@@ -312,7 +311,7 @@ func (e *Docker) create(ctx context.Context, spec *Spec, step *Step, output io.W
 
 // helper function emulates the `docker start` command.
 func (e *Docker) start(ctx context.Context, id string) error {
-	return e.client.ContainerStart(ctx, id, types.ContainerStartOptions{})
+	return e.client.ContainerStart(ctx, id, container.StartOptions{})
 }
 
 // helper function emulates the `docker wait` command, blocking
@@ -361,7 +360,7 @@ func (e *Docker) wait(ctx context.Context, id string) (*runtime.State, error) {
 
 // helper function emulates the `docker logs -f` command, streaming all container logs until the container stops.
 func (e *Docker) deferTail(ctx context.Context, id string, output io.Writer) (logs io.ReadCloser, err error) {
-	opts := types.ContainerLogsOptions{
+	opts := container.LogsOptions{
 		Follow:     true,
 		ShowStdout: true,
 		ShowStderr: true,
@@ -385,7 +384,7 @@ func (e *Docker) deferTail(ctx context.Context, id string, output io.Writer) (lo
 
 // helper function emulates the `docker logs -f` command, streaming all container logs until the container stops.
 func (e *Docker) tail(ctx context.Context, id string, output io.Writer) error {
-	opts := types.ContainerLogsOptions{
+	opts := container.LogsOptions{
 		Follow:     true,
 		ShowStdout: true,
 		ShowStderr: true,
