@@ -5,13 +5,15 @@
 package compiler
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/drone-runners/drone-runner-docker/engine"
 	"github.com/drone-runners/drone-runner-docker/engine/resource"
+	"github.com/drone-runners/drone-runner-docker/internal/stepoutput"
 
 	"github.com/drone/drone-go/drone"
-	"github.com/drone/runner-go/manifest"
 )
 
 // helper function returns true if the step is configured to
@@ -61,13 +63,13 @@ func configureSerial(spec *engine.Spec) {
 // helper function converts the environment variables to a map,
 // returning only inline environment variables not derived from
 // a secret.
-func convertStaticEnv(src map[string]*manifest.Variable) map[string]string {
+func convertStaticEnv(src map[string]*resource.Variable) map[string]string {
 	dst := map[string]string{}
 	for k, v := range src {
 		if v == nil {
 			continue
 		}
-		if strings.TrimSpace(v.Secret) == "" {
+		if strings.TrimSpace(v.Secret) == "" && strings.TrimSpace(v.FromOutput) == "" {
 			dst[k] = v.Value
 		}
 	}
@@ -77,7 +79,7 @@ func convertStaticEnv(src map[string]*manifest.Variable) map[string]string {
 // helper function converts the environment variables to a map,
 // returning only inline environment variables not derived from
 // a secret.
-func convertSecretEnv(src map[string]*manifest.Variable) []*engine.Secret {
+func convertSecretEnv(src map[string]*resource.Variable) []*engine.Secret {
 	dst := []*engine.Secret{}
 	for k, v := range src {
 		if v == nil {
@@ -92,6 +94,24 @@ func convertSecretEnv(src map[string]*manifest.Variable) []*engine.Secret {
 		}
 	}
 	return dst
+}
+
+func convertOutputEnv(src map[string]*resource.Variable) (map[string]stepoutput.OutputRef, error) {
+	dst := map[string]stepoutput.OutputRef{}
+	for key, value := range src {
+		if value == nil || strings.TrimSpace(value.FromOutput) == "" {
+			continue
+		}
+		ref, err := stepoutput.ParseRef(value.FromOutput)
+		if err != nil {
+			return nil, err
+		}
+		dst[key] = ref
+	}
+	if len(dst) == 0 {
+		return nil, nil
+	}
+	return dst, nil
 }
 
 // helper function modifies the pipeline dependency graph to
@@ -123,6 +143,52 @@ func removeCloneDeps(spec *engine.Spec) {
 	}
 }
 
+func validateOutputRefs(spec *engine.Spec) error {
+	steps := map[string]*engine.Step{}
+	for _, step := range spec.Steps {
+		steps[step.Name] = step
+	}
+	for _, step := range spec.Steps {
+		if step.Detach && len(step.OutputEnvs) != 0 {
+			return errors.New("detached steps cannot consume from_output values")
+		}
+		for envName, ref := range step.OutputEnvs {
+			producer, ok := steps[ref.Step]
+			if !ok {
+				return fmt.Errorf("step %q references unknown output producer %q for %s", step.Name, ref.Step, envName)
+			}
+			if producer.Detach {
+				return fmt.Errorf("step %q cannot consume outputs from detached step %q", step.Name, ref.Step)
+			}
+			if !dependsOnStep(spec, step.Name, ref.Step, map[string]bool{}) {
+				return fmt.Errorf("step %q must depend on %q to consume %s", step.Name, ref.Step, envName)
+			}
+		}
+	}
+	return nil
+}
+
+func dependsOnStep(spec *engine.Spec, consumer, producer string, seen map[string]bool) bool {
+	if consumer == producer {
+		return true
+	}
+	if seen[consumer] {
+		return false
+	}
+	seen[consumer] = true
+	for _, step := range spec.Steps {
+		if step.Name != consumer {
+			continue
+		}
+		for _, dep := range step.DependsOn {
+			if dep == producer || dependsOnStep(spec, dep, producer, seen) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // helper function modifies the pipeline dependency graph to
 // account for the clone step.
 func convertPullPolicy(s string) engine.PullPolicy {
@@ -140,7 +206,7 @@ func convertPullPolicy(s string) engine.PullPolicy {
 
 // helper function returns true if the environment variable
 // is restricted for internal-use only.
-func isRestrictedVariable(env map[string]*manifest.Variable) bool {
+func isRestrictedVariable(env map[string]*resource.Variable) bool {
 	for _, name := range restrictedVars {
 		if _, ok := env[name]; ok {
 			return true

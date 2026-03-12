@@ -7,6 +7,8 @@ package engine
 import (
 	"github.com/drone/runner-go/environ"
 	"github.com/drone/runner-go/pipeline/runtime"
+
+	"github.com/drone-runners/drone-runner-docker/internal/stepoutput"
 )
 
 type (
@@ -15,49 +17,52 @@ type (
 	// required instructions for reproducible pipeline
 	// execution.
 	Spec struct {
-		Platform Platform  `json:"platform,omitempty"`
-		Steps    []*Step   `json:"steps,omitempty"`
-		Internal []*Step   `json:"internal,omitempty"`
-		Volumes  []*Volume `json:"volumes,omitempty"`
-		Network  Network   `json:"network"`
+		Platform  Platform  `json:"platform,omitempty"`
+		Steps     []*Step   `json:"steps,omitempty"`
+		Internal  []*Step   `json:"internal,omitempty"`
+		Volumes   []*Volume `json:"volumes,omitempty"`
+		Network   Network   `json:"network"`
+		OutputDir string    `json:"output_dir,omitempty"`
 	}
 
 	// Step defines a pipeline step.
 	Step struct {
-		ID           string            `json:"id,omitempty"`
-		Auth         *Auth             `json:"auth,omitempty"`
-		Command      []string          `json:"args,omitempty"`
-		CPUPeriod    int64             `json:"cpu_period,omitempty"`
-		CPUQuota     int64             `json:"cpu_quota,omitempty"`
-		CPUShares    int64             `json:"cpu_shares,omitempty"`
-		CPUSet       []string          `json:"cpu_set,omitempty"`
-		Detach       bool              `json:"detach,omitempty"`
-		DependsOn    []string          `json:"depends_on,omitempty"`
-		Devices      []*VolumeDevice   `json:"devices,omitempty"`
-		DNS          []string          `json:"dns,omitempty"`
-		DNSSearch    []string          `json:"dns_search,omitempty"`
-		Entrypoint   []string          `json:"entrypoint,omitempty"`
-		Envs         map[string]string `json:"environment,omitempty"`
-		ErrPolicy    runtime.ErrPolicy `json:"err_policy,omitempty"`
-		ExtraHosts   []string          `json:"extra_hosts,omitempty"`
-		IgnoreStdout bool              `json:"ignore_stderr,omitempty"`
-		IgnoreStderr bool              `json:"ignore_stdout,omitempty"`
-		Image        string            `json:"image,omitempty"`
-		Labels       map[string]string `json:"labels,omitempty"`
-		MemSwapLimit int64             `json:"memswap_limit,omitempty"`
-		MemLimit     int64             `json:"mem_limit,omitempty"`
-		Name         string            `json:"name,omitempty"`
-		Network      string            `json:"network,omitempty"`
-		Networks     []string          `json:"networks,omitempty"`
-		Privileged   bool              `json:"privileged,omitempty"`
-		Pull         PullPolicy        `json:"pull,omitempty"`
-		RunPolicy    runtime.RunPolicy `json:"run_policy,omitempty"`
-		Secrets      []*Secret         `json:"secrets,omitempty"`
-		ShmSize      int64             `json:"shm_size,omitempty"`
-		StopGrace    int               `json:"stop_grace,omitempty"`
-		User         string            `json:"user,omitempty"`
-		Volumes      []*VolumeMount    `json:"volumes,omitempty"`
-		WorkingDir   string            `json:"working_dir,omitempty"`
+		ID           string                          `json:"id,omitempty"`
+		Auth         *Auth                           `json:"auth,omitempty"`
+		Command      []string                        `json:"args,omitempty"`
+		CPUPeriod    int64                           `json:"cpu_period,omitempty"`
+		CPUQuota     int64                           `json:"cpu_quota,omitempty"`
+		CPUShares    int64                           `json:"cpu_shares,omitempty"`
+		CPUSet       []string                        `json:"cpu_set,omitempty"`
+		Detach       bool                            `json:"detach,omitempty"`
+		DependsOn    []string                        `json:"depends_on,omitempty"`
+		Devices      []*VolumeDevice                 `json:"devices,omitempty"`
+		DNS          []string                        `json:"dns,omitempty"`
+		DNSSearch    []string                        `json:"dns_search,omitempty"`
+		Entrypoint   []string                        `json:"entrypoint,omitempty"`
+		Envs         map[string]string               `json:"environment,omitempty"`
+		ErrPolicy    runtime.ErrPolicy               `json:"err_policy,omitempty"`
+		ExtraHosts   []string                        `json:"extra_hosts,omitempty"`
+		IgnoreStdout bool                            `json:"ignore_stderr,omitempty"`
+		IgnoreStderr bool                            `json:"ignore_stdout,omitempty"`
+		Image        string                          `json:"image,omitempty"`
+		Labels       map[string]string               `json:"labels,omitempty"`
+		MemSwapLimit int64                           `json:"memswap_limit,omitempty"`
+		MemLimit     int64                           `json:"mem_limit,omitempty"`
+		Name         string                          `json:"name,omitempty"`
+		Network      string                          `json:"network,omitempty"`
+		Networks     []string                        `json:"networks,omitempty"`
+		OutputDir    string                          `json:"output_dir,omitempty"`
+		OutputEnvs   map[string]stepoutput.OutputRef `json:"output_envs,omitempty"`
+		Privileged   bool                            `json:"privileged,omitempty"`
+		Pull         PullPolicy                      `json:"pull,omitempty"`
+		RunPolicy    runtime.RunPolicy               `json:"run_policy,omitempty"`
+		Secrets      []*Secret                       `json:"secrets,omitempty"`
+		ShmSize      int64                           `json:"shm_size,omitempty"`
+		StopGrace    int                             `json:"stop_grace,omitempty"`
+		User         string                          `json:"user,omitempty"`
+		Volumes      []*VolumeMount                  `json:"volumes,omitempty"`
+		WorkingDir   string                          `json:"working_dir,omitempty"`
 	}
 
 	// Secret represents a secret variable.
@@ -165,5 +170,11 @@ func (s *Step) Clone() runtime.Step {
 	dst := new(Step)
 	*dst = *s
 	dst.Envs = environ.Combine(s.Envs)
+	if len(s.OutputEnvs) != 0 {
+		dst.OutputEnvs = map[string]stepoutput.OutputRef{}
+		for key, value := range s.OutputEnvs {
+			dst.OutputEnvs[key] = value
+		}
+	}
 	return dst
 }

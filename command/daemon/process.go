@@ -5,10 +5,13 @@
 package daemon
 
 import (
+	"os"
+
 	"github.com/drone-runners/drone-runner-docker/engine"
 	"github.com/drone-runners/drone-runner-docker/engine/compiler"
 	"github.com/drone-runners/drone-runner-docker/engine/linter"
 	"github.com/drone-runners/drone-runner-docker/engine/resource"
+	"github.com/drone-runners/drone-runner-docker/internal/outputexec"
 	"github.com/drone/runner-go/pipeline/uploader"
 
 	"github.com/drone/runner-go/client"
@@ -64,6 +67,7 @@ func (c *processCommand) run(*kingpin.ParseContext) error {
 
 	remote := remote.New(cli)
 	upload := uploader.New(cli)
+	executablePath, _ := os.Executable()
 
 	runner := &runtime.Runner{
 		Client:   cli,
@@ -116,8 +120,9 @@ func (c *processCommand) run(*kingpin.ParseContext) error {
 					config.Secret.SkipVerify,
 				),
 			),
+			ExecutablePath: executablePath,
 		},
-		Exec: runtime.NewExecer(
+		Exec: outputexec.New(
 			remote,
 			remote,
 			upload,

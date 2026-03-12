@@ -122,6 +122,11 @@ type Compiler struct {
 	// Mount is an optional field that overrides the default
 	// workspace volume and mounts to the host path
 	Mount string
+
+	// ExecutablePath is the absolute path to the current runner
+	// binary on the host. It is mounted into step containers as
+	// the drone-output helper.
+	ExecutablePath string
 }
 
 // Compile compiles the configuration file.
@@ -245,6 +250,39 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		envs["DRONE_DOCKER_VOLUME_PATH"] = volume.HostPath.Path
 	}
 
+	var helperMounts []*engine.VolumeMount
+	if c.ExecutablePath != "" && pipeline.Platform.OS != "windows" {
+		helperID := random()
+		spec.Volumes = append(spec.Volumes, &engine.Volume{
+			HostPath: &engine.VolumeHostPath{
+				ID:   helperID,
+				Name: helperID,
+				Path: c.ExecutablePath,
+			},
+		})
+		helperMounts = []*engine.VolumeMount{
+			{Name: helperID, Path: "/drone/bin/drone-output"},
+			{Name: helperID, Path: "/usr/local/bin/drone-output"},
+			{Name: helperID, Path: "/bin/drone-output"},
+		}
+	}
+	outputMount := &engine.VolumeMount{}
+	if c.ExecutablePath != "" {
+		if outputDir, err := os.MkdirTemp("", "drone-step-outputs-*"); err == nil {
+			spec.OutputDir = outputDir
+			outputID := random()
+			spec.Volumes = append(spec.Volumes, &engine.Volume{
+				HostPath: &engine.VolumeHostPath{
+					ID:   outputID,
+					Name: outputID,
+					Path: outputDir,
+				},
+			})
+			outputMount = &engine.VolumeMount{Name: outputID, Path: "/drone/outputs"}
+			envs["DRONE_OUTPUT_ROOT"] = outputMount.Path
+		}
+	}
+
 	// create tmate variables
 	if c.Tmate.Server != "" {
 		envs["DRONE_TMATE_HOST"] = c.Tmate.Server
@@ -283,6 +321,12 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		step.Labels = stageLabels
 		step.Pull = engine.PullIfNotExists
 		step.Volumes = append(step.Volumes, mount)
+		step.Volumes = append(step.Volumes, helperMounts...)
+		if outputMount.Name != "" {
+			step.OutputDir = "/drone/outputs/" + step.Name
+			step.Envs["DRONE_OUTPUT_DIR"] = step.OutputDir
+			step.Volumes = append(step.Volumes, outputMount)
+		}
 		spec.Steps = append(spec.Steps, step)
 
 		// always set the .netrc file for the clone step.
@@ -306,10 +350,19 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 
 	// create steps
 	for _, src := range pipeline.Services {
-		dst := createStep(pipeline, src)
+		dst, err := createStep(pipeline, src)
+		if err != nil {
+			return spec
+		}
 		dst.Detach = true
 		dst.Envs = environ.Combine(envs, dst.Envs)
 		dst.Volumes = append(dst.Volumes, mount)
+		dst.Volumes = append(dst.Volumes, helperMounts...)
+		if outputMount.Name != "" {
+			dst.OutputDir = "/drone/outputs/" + dst.Name
+			dst.Envs["DRONE_OUTPUT_DIR"] = dst.OutputDir
+			dst.Volumes = append(dst.Volumes, outputMount)
+		}
 		dst.Labels = stageLabels
 		setupScript(src, dst, osVal)
 		setupWorkdir(src, dst, full)
@@ -328,9 +381,18 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 
 	// create steps
 	for _, src := range pipeline.Steps {
-		dst := createStep(pipeline, src)
+		dst, err := createStep(pipeline, src)
+		if err != nil {
+			return spec
+		}
 		dst.Envs = environ.Combine(envs, dst.Envs)
 		dst.Volumes = append(dst.Volumes, mount)
+		dst.Volumes = append(dst.Volumes, helperMounts...)
+		if outputMount.Name != "" {
+			dst.OutputDir = "/drone/outputs/" + dst.Name
+			dst.Envs["DRONE_OUTPUT_DIR"] = dst.OutputDir
+			dst.Volumes = append(dst.Volumes, outputMount)
+		}
 		dst.Labels = stageLabels
 		setupScript(src, dst, osVal)
 		setupWorkdir(src, dst, full)

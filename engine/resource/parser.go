@@ -6,7 +6,10 @@ package resource
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 
+	"github.com/drone-runners/drone-runner-docker/internal/stepoutput"
 	"github.com/drone/runner-go/manifest"
 
 	"github.com/buildkite/yaml"
@@ -54,5 +57,51 @@ func lint(pipeline *Pipeline) error {
 		}
 		names[step.Name] = struct{}{}
 	}
+
+	stepIndex := map[string]*Step{}
+	for _, step := range pipeline.Steps {
+		stepIndex[step.Name] = step
+	}
+	for _, step := range pipeline.Steps {
+		for envName, variable := range step.Environment {
+			if variable == nil || strings.TrimSpace(variable.FromOutput) == "" {
+				continue
+			}
+			ref, err := stepoutput.ParseRef(variable.FromOutput)
+			if err != nil {
+				return fmt.Errorf("Linter: invalid from_output for %s.%s: %w", step.Name, envName, err)
+			}
+			producer, ok := stepIndex[ref.Step]
+			if !ok {
+				return fmt.Errorf("Linter: step %q references unknown output producer %q", step.Name, ref.Step)
+			}
+			if producer.Detach {
+				return fmt.Errorf("Linter: step %q cannot consume outputs from detached step %q", step.Name, ref.Step)
+			}
+			if !dependsOn(pipeline, step.Name, ref.Step, map[string]bool{}) {
+				return fmt.Errorf("Linter: step %q must depend on %q to consume %s", step.Name, ref.Step, envName)
+			}
+		}
+	}
 	return nil
+}
+
+func dependsOn(pipeline *Pipeline, consumer, producer string, seen map[string]bool) bool {
+	if consumer == producer {
+		return true
+	}
+	if seen[consumer] {
+		return false
+	}
+	seen[consumer] = true
+	current := pipeline.GetStep(consumer)
+	if current == nil {
+		return false
+	}
+	for _, dep := range current.DependsOn {
+		if dep == producer || dependsOn(pipeline, dep, producer, seen) {
+			return true
+		}
+	}
+	return false
 }

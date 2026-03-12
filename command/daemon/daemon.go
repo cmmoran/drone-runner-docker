@@ -6,6 +6,7 @@ package daemon
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/drone-runners/drone-runner-docker/engine"
@@ -13,6 +14,7 @@ import (
 	"github.com/drone-runners/drone-runner-docker/engine/linter"
 	"github.com/drone-runners/drone-runner-docker/engine/resource"
 	"github.com/drone-runners/drone-runner-docker/internal/match"
+	"github.com/drone-runners/drone-runner-docker/internal/outputexec"
 
 	"github.com/drone/runner-go/client"
 	"github.com/drone/runner-go/environ/provider"
@@ -114,6 +116,7 @@ func (c *daemonCommand) run(*kingpin.ParseContext) error {
 	tracer := history.New(remote)
 	hook := loghistory.New()
 	logrus.AddHook(hook)
+	executablePath, _ := os.Executable()
 
 	runner := &runtime.Runner{
 		Client:   cli,
@@ -180,8 +183,9 @@ func (c *daemonCommand) run(*kingpin.ParseContext) error {
 					config.Secret.SkipVerify,
 				),
 			),
+			ExecutablePath: executablePath,
 		},
-		Exec: runtime.NewExecer(
+		Exec: outputexec.New(
 			tracer,
 			remote,
 			upload,

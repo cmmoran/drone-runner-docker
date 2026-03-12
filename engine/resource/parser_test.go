@@ -7,6 +7,7 @@ package resource
 import (
 	"testing"
 
+	"github.com/buildkite/yaml"
 	"github.com/drone/runner-go/manifest"
 
 	"github.com/google/go-cmp/cmp"
@@ -48,7 +49,7 @@ func TestParse(t *testing.T) {
 			Clone: manifest.Clone{
 				Depth: 50,
 			},
-			Deps: []string{"dependency"},
+			Deps:        []string{"dependency"},
 			PullSecrets: []string{"dockerconfigjson"},
 			Trigger: manifest.Conditions{
 				Branch: manifest.Condition{
@@ -73,9 +74,9 @@ func TestParse(t *testing.T) {
 						"go build",
 						"go test",
 					},
-					Environment: map[string]*manifest.Variable{
-						"GOOS":   &manifest.Variable{Value: "linux"},
-						"GOARCH": &manifest.Variable{Value: "arm64"},
+					Environment: map[string]*Variable{
+						"GOOS":   {Value: "linux"},
+						"GOARCH": {Value: "arm64"},
 					},
 					MemLimit:     manifest.BytesSize(1073741824),
 					MemSwapLimit: manifest.BytesSize(2147483648),
@@ -169,5 +170,52 @@ func TestLint(t *testing.T) {
 	p.Steps = []*Step{{Name: "build"}, {Name: ""}}
 	if err := lint(p); err == nil {
 		t.Errorf("Expect error when empty name")
+	}
+}
+
+func TestVariableUnmarshalFromOutput(t *testing.T) {
+	input := []byte("VALUE:\n  from_output: build.version\n")
+	var got map[string]*Variable
+	err := yaml.Unmarshal(input, &got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["VALUE"].FromOutput != "build.version" {
+		t.Fatalf("want build.version, got %q", got["VALUE"].FromOutput)
+	}
+}
+
+func TestLint_FromOutputValid(t *testing.T) {
+	p := &Pipeline{
+		Steps: []*Step{
+			{Name: "build"},
+			{
+				Name:      "publish",
+				DependsOn: []string{"build"},
+				Environment: map[string]*Variable{
+					"VERSION": {FromOutput: "build.version"},
+				},
+			},
+		},
+	}
+	if err := lint(p); err != nil {
+		t.Fatalf("expected valid from_output, got %v", err)
+	}
+}
+
+func TestLint_FromOutputRequiresDependency(t *testing.T) {
+	p := &Pipeline{
+		Steps: []*Step{
+			{Name: "build"},
+			{
+				Name: "publish",
+				Environment: map[string]*Variable{
+					"VERSION": {FromOutput: "build.version"},
+				},
+			},
+		},
+	}
+	if err := lint(p); err == nil {
+		t.Fatal("expected dependency validation error")
 	}
 }

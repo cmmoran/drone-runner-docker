@@ -15,7 +15,11 @@ import (
 	"github.com/drone/runner-go/pipeline/runtime"
 )
 
-func createStep(spec *resource.Pipeline, src *resource.Step) *engine.Step {
+func createStep(spec *resource.Pipeline, src *resource.Step) (*engine.Step, error) {
+	outputEnvs, err := convertOutputEnv(src.Environment)
+	if err != nil {
+		return nil, err
+	}
 	dst := &engine.Step{
 		ID:           random(),
 		Name:         src.Name,
@@ -31,6 +35,7 @@ func createStep(spec *resource.Pipeline, src *resource.Step) *engine.Step {
 		IgnoreStderr: false,
 		IgnoreStdout: false,
 		Network:      src.Network,
+		OutputEnvs:   outputEnvs,
 		Privileged:   src.Privileged,
 		Pull:         convertPullPolicy(src.Pull),
 		User:         src.User,
@@ -117,5 +122,5 @@ func createStep(spec *resource.Pipeline, src *resource.Step) *engine.Step {
 		dst.ErrPolicy = runtime.ErrFailFast
 	}
 
-	return dst
+	return dst, nil
 }

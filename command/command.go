@@ -26,8 +26,9 @@ func Command() {
 	registerCompile(app)
 	registerExec(app)
 	registerCopy(app)
+	registerOutput(app)
 	daemon.Register(app)
 
 	kingpin.Version(version)
-	kingpin.MustParse(app.Parse(os.Args[1:]))
+	kingpin.MustParse(app.Parse(normalizeOutputInvocation(os.Args)))
 }
