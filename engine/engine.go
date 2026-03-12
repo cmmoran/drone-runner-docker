@@ -156,11 +156,20 @@ func (e *Docker) Destroy(ctx context.Context, specv runtime.Spec) error {
 
 	// stop all containers
 	for _, step := range append(spec.Steps, spec.Internal...) {
-		if err := e.client.ContainerKill(ctx, step.ID, "9"); err != nil && !cerrdefs.IsNotFound(err) && !cerrdefs.IsConflict(err) {
+		if err := e.client.ContainerStop(ctx, step.ID, container.StopOptions{}); err != nil {
+			if cerrdefs.IsNotFound(err) || cerrdefs.IsConflict(err) {
+				continue
+			}
 			logger.FromContext(ctx).
 				WithError(err).
 				WithField("container", step.ID).
-				Debugln("cannot kill container")
+				Debugln("cannot stop container gracefully, forcing kill")
+			if err := e.client.ContainerKill(ctx, step.ID, "9"); err != nil && !cerrdefs.IsNotFound(err) && !cerrdefs.IsConflict(err) {
+				logger.FromContext(ctx).
+					WithError(err).
+					WithField("container", step.ID).
+					Debugln("cannot kill container")
+			}
 		}
 	}
 
