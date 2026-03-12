@@ -19,11 +19,13 @@ import (
 	"github.com/drone/runner-go/registry/auths"
 
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 // Opts configures the Docker engine.
@@ -33,12 +35,30 @@ type Opts struct {
 
 // Docker implements a Docker pipeline engine.
 type Docker struct {
-	client   client.APIClient
+	client   dockerClient
 	hidePull bool
 }
 
+type dockerClient interface {
+	Ping(ctx context.Context) (types.Ping, error)
+	VolumeCreate(ctx context.Context, options volume.CreateOptions) (volume.Volume, error)
+	NetworkCreate(ctx context.Context, name string, options network.CreateOptions) (network.CreateResponse, error)
+	ContainerStop(ctx context.Context, containerID string, options container.StopOptions) error
+	ContainerKill(ctx context.Context, containerID, signal string) error
+	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
+	VolumeRemove(ctx context.Context, volumeID string, force bool) error
+	NetworkRemove(ctx context.Context, networkID string) error
+	ImagePull(ctx context.Context, refStr string, options image.PullOptions) (io.ReadCloser, error)
+	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
+	NetworkConnect(ctx context.Context, networkID, containerID string, config *network.EndpointSettings) error
+	ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error
+	ContainerWait(ctx context.Context, containerID string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error)
+	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
+	ContainerLogs(ctx context.Context, containerID string, options container.LogsOptions) (io.ReadCloser, error)
+}
+
 // New returns a new engine.
-func New(client client.APIClient, opts Opts) *Docker {
+func New(client dockerClient, opts Opts) *Docker {
 	return &Docker{
 		client:   client,
 		hidePull: opts.HidePull,
