@@ -33,6 +33,8 @@ import (
 	"github.com/dchest/uniuri"
 )
 
+const helperBinPath = "/drone/bin/drone-output"
+
 // random generator function
 var random = func() string {
 	return "drone-" + uniuri.NewLen(20)
@@ -350,7 +352,6 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 			})
 			helperMounts = []*engine.VolumeMount{
 				{Name: helperID, Path: "/drone/bin"},
-				{Name: helperID, Path: "/usr/local/bin/drone-output"},
 			}
 		case c.ExecutablePath != "":
 			helperEnabled = true
@@ -364,7 +365,6 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 			})
 			helperMounts = []*engine.VolumeMount{
 				{Name: helperID, Path: "/drone/bin/drone-output"},
-				{Name: helperID, Path: "/usr/local/bin/drone-output"},
 			}
 		}
 	}
@@ -466,6 +466,10 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		step.Pull = engine.PullIfNotExists
 		step.Volumes = append(step.Volumes, mount)
 		step.Volumes = append(step.Volumes, helperMounts...)
+		if helperEnabled {
+			injectHelperBin(step)
+			prependPathToScript(step, "/drone/bin")
+		}
 		if helperEnabled && outputMode == "file" {
 			step.OutputDir = resolveOutputDir(step)
 			step.Envs["DRONE_OUTPUT_DIR"] = step.OutputDir
@@ -504,6 +508,9 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		dst.Envs = environ.Combine(envs, dst.Envs)
 		dst.Volumes = append(dst.Volumes, mount)
 		dst.Volumes = append(dst.Volumes, helperMounts...)
+		if helperEnabled {
+			injectHelperBin(dst)
+		}
 		if helperEnabled && outputMode == "file" {
 			dst.OutputDir = resolveOutputDir(dst)
 			dst.Envs["DRONE_OUTPUT_DIR"] = dst.OutputDir
@@ -513,6 +520,9 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		}
 		dst.Labels = stageLabels
 		setupScript(src, dst, osVal)
+		if helperEnabled {
+			prependPathToScript(dst, "/drone/bin")
+		}
 		setupWorkdir(src, dst, full)
 		spec.Steps = append(spec.Steps, dst)
 
@@ -536,6 +546,9 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		dst.Envs = environ.Combine(envs, dst.Envs)
 		dst.Volumes = append(dst.Volumes, mount)
 		dst.Volumes = append(dst.Volumes, helperMounts...)
+		if helperEnabled {
+			injectHelperBin(dst)
+		}
 		if helperEnabled && outputMode == "file" {
 			dst.OutputDir = resolveOutputDir(dst)
 			dst.Envs["DRONE_OUTPUT_DIR"] = dst.OutputDir
@@ -545,6 +558,9 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		}
 		dst.Labels = stageLabels
 		setupScript(src, dst, osVal)
+		if helperEnabled {
+			prependPathToScript(dst, "/drone/bin")
+		}
 		setupWorkdir(src, dst, full)
 		spec.Steps = append(spec.Steps, dst)
 
@@ -888,4 +904,12 @@ func injectOutputTransport(step *engine.Step, mode, token, socketPath, httpURL s
 		delete(step.Envs, "DRONE_OUTPUT_SOCKET")
 		delete(step.Envs, "DRONE_OUTPUT_DIR")
 	}
+}
+
+func injectHelperBin(step *engine.Step) {
+	if step.Envs == nil {
+		step.Envs = map[string]string{}
+	}
+	step.Envs["DRONE_OUTPUT_BIN"] = helperBinPath
+	step.Envs["PLUGIN_OUTPUT_HELPER_BIN"] = helperBinPath
 }

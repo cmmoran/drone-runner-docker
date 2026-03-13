@@ -5,6 +5,8 @@
 package compiler
 
 import (
+	"strings"
+
 	"github.com/drone-runners/drone-runner-docker/engine"
 	"github.com/drone-runners/drone-runner-docker/engine/compiler/shell"
 	"github.com/drone-runners/drone-runner-docker/engine/compiler/shell/powershell"
@@ -39,4 +41,12 @@ func setupScriptPosix(src *resource.Step, dst *engine.Step) {
 	dst.Entrypoint = []string{"/bin/sh", "-c"}
 	dst.Command = []string{`echo "$DRONE_SCRIPT" | /bin/sh`}
 	dst.Envs["DRONE_SCRIPT"] = shell.Script(src.Commands)
+}
+
+func prependPathToScript(dst *engine.Step, path string) {
+	script := dst.Envs["DRONE_SCRIPT"]
+	if script == "" {
+		return
+	}
+	dst.Envs["DRONE_SCRIPT"] = "export PATH=\"" + path + ":$PATH\"\n" + strings.TrimPrefix(script, "\n")
 }

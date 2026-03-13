@@ -468,9 +468,10 @@ steps:
 	}
 
 	compiler := &Compiler{
-		Environ:  provider.Static(nil),
-		Registry: registry.Static(nil),
-		Secret:   secret.Static(nil),
+		Environ:        provider.Static(nil),
+		Registry:       registry.Static(nil),
+		Secret:         secret.Static(nil),
+		ExecutablePath: "/tmp/drone-output",
 	}
 	args := runtime.CompilerArgs{
 		Repo:     &drone.Repo{},
@@ -496,6 +497,12 @@ steps:
 	}
 	if got := publish.Envs["PLUGIN_ARTIFACT_FILE"]; got != "" {
 		t.Fatalf("did not expect inline PLUGIN_ARTIFACT_FILE, got %q", got)
+	}
+	if got, want := publish.Envs["DRONE_OUTPUT_BIN"], "/drone/bin/drone-output"; got != want {
+		t.Fatalf("want DRONE_OUTPUT_BIN %q, got %q", want, got)
+	}
+	if got, want := publish.Envs["PLUGIN_OUTPUT_HELPER_BIN"], "/drone/bin/drone-output"; got != want {
+		t.Fatalf("want PLUGIN_OUTPUT_HELPER_BIN %q, got %q", want, got)
 	}
 	if got, want := publish.Envs["PLUGIN_FROM_OUTPUT_KEYS"], "artifact_file"; got != want {
 		t.Fatalf("want PLUGIN_FROM_OUTPUT_KEYS %q, got %q", want, got)
