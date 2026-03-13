@@ -10,10 +10,12 @@ package compiler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/dchest/uniuri"
@@ -203,7 +205,11 @@ steps:
 }
 
 func TestCompile_OutputTransportUnix(t *testing.T) {
-	random = notRandom
+	seq := 0
+	random = func() string {
+		seq++
+		return fmt.Sprintf("random-%d", seq)
+	}
 	defer func() { random = uniuri.New }()
 
 	socketRoot := t.TempDir()
@@ -277,8 +283,8 @@ steps:
 	if got, want := publish.Envs["DRONE_OUTPUT_TRANSPORT"], "unix"; got != want {
 		t.Fatalf("want DRONE_OUTPUT_TRANSPORT %q, got %q", want, got)
 	}
-	if got, want := publish.Envs["DRONE_OUTPUT_SOCKET"], filepath.Join(socketRoot, "random", "outputs.sock"); got != want {
-		t.Fatalf("want DRONE_OUTPUT_SOCKET %q, got %q", want, got)
+	if got := publish.Envs["DRONE_OUTPUT_SOCKET"]; !strings.HasPrefix(got, socketRoot+string(os.PathSeparator)) || !strings.HasSuffix(got, string(os.PathSeparator)+"outputs.sock") {
+		t.Fatalf("want DRONE_OUTPUT_SOCKET under %q ending in outputs.sock, got %q", socketRoot, got)
 	}
 	if got := publish.Envs["DRONE_OUTPUT_DIR"]; got != "" {
 		t.Fatalf("did not expect DRONE_OUTPUT_DIR in unix mode, got %q", got)

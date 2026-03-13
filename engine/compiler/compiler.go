@@ -350,6 +350,7 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 			})
 			helperMounts = []*engine.VolumeMount{
 				{Name: helperID, Path: "/drone/bin"},
+				{Name: helperID, Path: "/usr/local/bin/drone-output"},
 			}
 		case c.ExecutablePath != "":
 			helperEnabled = true
@@ -363,10 +364,8 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 			})
 			helperMounts = []*engine.VolumeMount{
 				{Name: helperID, Path: "/drone/bin/drone-output"},
+				{Name: helperID, Path: "/usr/local/bin/drone-output"},
 			}
-		}
-		if helperEnabled {
-			envs["PATH"] = "/drone/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 		}
 	}
 	if helperEnabled {
