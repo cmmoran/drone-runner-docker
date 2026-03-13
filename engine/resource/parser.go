@@ -82,6 +82,25 @@ func lint(pipeline *Pipeline) error {
 				return fmt.Errorf("Linter: step %q must depend on %q to consume %s", step.Name, ref.Step, envName)
 			}
 		}
+		for settingName, variable := range step.Settings {
+			if variable == nil || strings.TrimSpace(variable.FromOutput) == "" {
+				continue
+			}
+			ref, err := stepoutput.ParseRef(variable.FromOutput)
+			if err != nil {
+				return fmt.Errorf("Linter: invalid from_output for %s.settings.%s: %w", step.Name, settingName, err)
+			}
+			producer, ok := stepIndex[ref.Step]
+			if !ok {
+				return fmt.Errorf("Linter: step %q references unknown output producer %q", step.Name, ref.Step)
+			}
+			if producer.Detach {
+				return fmt.Errorf("Linter: step %q cannot consume outputs from detached step %q", step.Name, ref.Step)
+			}
+			if !dependsOn(pipeline, step.Name, ref.Step, map[string]bool{}) {
+				return fmt.Errorf("Linter: step %q must depend on %q to consume setting %s", step.Name, ref.Step, settingName)
+			}
+		}
 	}
 	return nil
 }

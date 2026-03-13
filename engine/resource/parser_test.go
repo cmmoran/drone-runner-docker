@@ -185,6 +185,18 @@ func TestVariableUnmarshalFromOutput(t *testing.T) {
 	}
 }
 
+func TestParameterUnmarshalFromOutput(t *testing.T) {
+	input := []byte("artifact_file:\n  from_output: build.artifact_file\n")
+	var got map[string]*Parameter
+	err := yaml.Unmarshal(input, &got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["artifact_file"].FromOutput != "build.artifact_file" {
+		t.Fatalf("want build.artifact_file, got %q", got["artifact_file"].FromOutput)
+	}
+}
+
 func TestLint_FromOutputValid(t *testing.T) {
 	p := &Pipeline{
 		Steps: []*Step{
@@ -211,6 +223,41 @@ func TestLint_FromOutputRequiresDependency(t *testing.T) {
 				Name: "publish",
 				Environment: map[string]*Variable{
 					"VERSION": {FromOutput: "build.version"},
+				},
+			},
+		},
+	}
+	if err := lint(p); err == nil {
+		t.Fatal("expected dependency validation error")
+	}
+}
+
+func TestLint_SettingFromOutputValid(t *testing.T) {
+	p := &Pipeline{
+		Steps: []*Step{
+			{Name: "build"},
+			{
+				Name:      "publish",
+				DependsOn: []string{"build"},
+				Settings: map[string]*Parameter{
+					"artifact_file": {FromOutput: "build.artifact_file"},
+				},
+			},
+		},
+	}
+	if err := lint(p); err != nil {
+		t.Fatalf("expected valid setting from_output, got %v", err)
+	}
+}
+
+func TestLint_SettingFromOutputRequiresDependency(t *testing.T) {
+	p := &Pipeline{
+		Steps: []*Step{
+			{Name: "build"},
+			{
+				Name: "publish",
+				Settings: map[string]*Parameter{
+					"artifact_file": {FromOutput: "build.artifact_file"},
 				},
 			},
 		},

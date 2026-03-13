@@ -114,6 +114,24 @@ func convertOutputEnv(src map[string]*resource.Variable) (map[string]stepoutput.
 	return dst, nil
 }
 
+func convertOutputSettings(src map[string]*resource.Parameter) (map[string]stepoutput.OutputRef, error) {
+	dst := map[string]stepoutput.OutputRef{}
+	for key, value := range src {
+		if value == nil || strings.TrimSpace(value.FromOutput) == "" {
+			continue
+		}
+		ref, err := stepoutput.ParseRef(value.FromOutput)
+		if err != nil {
+			return nil, err
+		}
+		dst["PLUGIN_"+strings.ToUpper(key)] = ref
+	}
+	if len(dst) == 0 {
+		return nil, nil
+	}
+	return dst, nil
+}
+
 // helper function modifies the pipeline dependency graph to
 // account for the clone step.
 func configureCloneDeps(spec *engine.Spec) {
@@ -162,6 +180,21 @@ func validateOutputRefs(spec *engine.Spec) error {
 			}
 			if !dependsOnStep(spec, step.Name, ref.Step, map[string]bool{}) {
 				return fmt.Errorf("step %q must depend on %q to consume %s", step.Name, ref.Step, envName)
+			}
+		}
+		if step.Detach && len(step.OutputSettings) != 0 {
+			return errors.New("detached steps cannot consume from_output plugin settings")
+		}
+		for settingName, ref := range step.OutputSettings {
+			producer, ok := steps[ref.Step]
+			if !ok {
+				return fmt.Errorf("step %q references unknown output producer %q for %s", step.Name, ref.Step, settingName)
+			}
+			if producer.Detach {
+				return fmt.Errorf("step %q cannot consume outputs from detached step %q", step.Name, ref.Step)
+			}
+			if !dependsOnStep(spec, step.Name, ref.Step, map[string]bool{}) {
+				return fmt.Errorf("step %q must depend on %q to consume %s", step.Name, ref.Step, settingName)
 			}
 		}
 	}

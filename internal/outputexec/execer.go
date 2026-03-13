@@ -253,39 +253,54 @@ func (e *Execer) exec(ctx context.Context, state *pipeline.State, spec runtime.S
 }
 
 func (e *Execer) injectOutputs(spec *engine.Spec, step *engine.Step) error {
-	if len(step.OutputEnvs) == 0 {
+	if len(step.OutputEnvs) == 0 && len(step.OutputSettings) == 0 {
 		return nil
 	}
 	resolved := map[string]string{}
 	for envName, ref := range step.OutputEnvs {
-		if e.service != nil && spec.PipelineID != "" && spec.OutputTransport != "file" {
-			value, ok, err := e.service.Resolve(spec.PipelineID, ref.Step, ref.Key)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return fmt.Errorf("missing outputs from step %q", ref.Step)
-			}
-			resolved[envName] = value
-			continue
-		}
-		e.mu.RLock()
-		values := e.outputs[ref.Step]
-		e.mu.RUnlock()
-		if len(values) == 0 {
-			return fmt.Errorf("missing outputs from step %q", ref.Step)
-		}
-		value, ok, err := stepoutput.ResolveValue(values, ref.Key)
+		value, err := e.resolveOutputValue(spec, ref)
 		if err != nil {
-			return err
+			return fmt.Errorf("missing output for %s: %w", envName, err)
 		}
-		if !ok {
-			return fmt.Errorf("missing output %q from step %q", ref.Key, ref.Step)
+		resolved[envName] = value
+	}
+	for envName, ref := range step.OutputSettings {
+		value, err := e.resolveOutputValue(spec, ref)
+		if err != nil {
+			return fmt.Errorf("missing output for %s: %w", envName, err)
 		}
 		resolved[envName] = value
 	}
 	step.Envs = environ.Combine(step.Envs, resolved)
 	return nil
+}
+
+func (e *Execer) resolveOutputValue(spec *engine.Spec, ref stepoutput.OutputRef) (string, error) {
+	if e.service != nil && spec.PipelineID != "" && spec.OutputTransport != "file" {
+		value, ok, err := e.service.Resolve(spec.PipelineID, ref.Step, ref.Key)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			return value, nil
+		}
+		return "", fmt.Errorf("missing outputs from step %q", ref.Step)
+	}
+
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	stepOutputs, ok := e.outputs[ref.Step]
+	if !ok {
+		return "", fmt.Errorf("missing outputs from step %q", ref.Step)
+	}
+	value, ok, err := stepoutput.ResolveValue(stepOutputs, ref.Key)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("missing output %q from step %q", ref.Key, ref.Step)
+	}
+	return value, nil
 }
 
 func (e *Execer) collectOutputs(spec *engine.Spec, step *engine.Step) error {

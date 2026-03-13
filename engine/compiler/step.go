@@ -5,6 +5,7 @@
 package compiler
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/drone-runners/drone-runner-docker/engine"
@@ -20,28 +21,33 @@ func createStep(spec *resource.Pipeline, src *resource.Step) (*engine.Step, erro
 	if err != nil {
 		return nil, err
 	}
+	outputSettings, err := convertOutputSettings(src.Settings)
+	if err != nil {
+		return nil, err
+	}
 	dst := &engine.Step{
-		ID:           random(),
-		Name:         src.Name,
-		Image:        image.Expand(src.Image),
-		Command:      src.Command,
-		Entrypoint:   src.Entrypoint,
-		Detach:       src.Detach,
-		DependsOn:    src.DependsOn,
-		DNS:          src.DNS,
-		DNSSearch:    src.DNSSearch,
-		Envs:         convertStaticEnv(src.Environment),
-		ExtraHosts:   src.ExtraHosts,
-		IgnoreStderr: false,
-		IgnoreStdout: false,
-		Network:      src.Network,
-		OutputEnvs:   outputEnvs,
-		Privileged:   src.Privileged,
-		Pull:         convertPullPolicy(src.Pull),
-		User:         src.User,
-		Secrets:      convertSecretEnv(src.Environment),
-		ShmSize:      int64(src.ShmSize),
-		WorkingDir:   src.WorkingDir,
+		ID:             random(),
+		Name:           src.Name,
+		Image:          image.Expand(src.Image),
+		Command:        src.Command,
+		Entrypoint:     src.Entrypoint,
+		Detach:         src.Detach,
+		DependsOn:      src.DependsOn,
+		DNS:            src.DNS,
+		DNSSearch:      src.DNSSearch,
+		Envs:           convertStaticEnv(src.Environment),
+		ExtraHosts:     src.ExtraHosts,
+		IgnoreStderr:   false,
+		IgnoreStdout:   false,
+		Network:        src.Network,
+		OutputEnvs:     outputEnvs,
+		OutputSettings: outputSettings,
+		Privileged:     src.Privileged,
+		Pull:           convertPullPolicy(src.Pull),
+		User:           src.User,
+		Secrets:        convertSecretEnv(src.Environment),
+		ShmSize:        int64(src.ShmSize),
+		WorkingDir:     src.WorkingDir,
 
 		//
 		//
@@ -79,11 +85,14 @@ func createStep(spec *resource.Pipeline, src *resource.Step) (*engine.Step, erro
 
 	// appends the settings variables to the
 	// container definition.
+	var fromSecretKeys []string
+	var fromOutputKeys []string
 	for key, value := range src.Settings {
 		// fix https://github.com/drone/drone-yaml/issues/13
 		if value == nil {
 			continue
 		}
+		originalKey := key
 		// all settings are passed to the plugin env
 		// variables, prefixed with PLUGIN_
 		key = "PLUGIN_" + strings.ToUpper(key)
@@ -91,17 +100,29 @@ func createStep(spec *resource.Pipeline, src *resource.Step) (*engine.Step, erro
 		// if the setting parameter is sources from the
 		// secret we create a secret enviornment variable.
 		if value.Secret != "" {
+			fromSecretKeys = append(fromSecretKeys, originalKey)
 			dst.Secrets = append(dst.Secrets, &engine.Secret{
 				Name: value.Secret,
 				Mask: true,
 				Env:  key,
 			})
+		} else if value.FromOutput != "" {
+			fromOutputKeys = append(fromOutputKeys, originalKey)
+			continue
 		} else {
 			// else if the setting parameter is opaque
 			// we inject as a string-encoded environment
 			// variable.
 			dst.Envs[key] = encoder.Encode(value.Value)
 		}
+	}
+	if len(fromSecretKeys) != 0 {
+		sort.Strings(fromSecretKeys)
+		dst.Envs["PLUGIN_FROM_SECRET_KEYS"] = strings.Join(fromSecretKeys, ",")
+	}
+	if len(fromOutputKeys) != 0 {
+		sort.Strings(fromOutputKeys)
+		dst.Envs["PLUGIN_FROM_OUTPUT_KEYS"] = strings.Join(fromOutputKeys, ",")
 	}
 
 	// set the pipeline step run policy. steps run on

@@ -443,6 +443,78 @@ steps:
 	}
 }
 
+func TestCompile_OutputSettingsFromOutput(t *testing.T) {
+	raw := `
+kind: pipeline
+type: docker
+name: default
+
+steps:
+  - name: build
+    image: alpine
+  - name: publish
+    image: plugins/docker
+    depends_on: [ build ]
+    settings:
+      artifact_file:
+        from_output: build.artifact_file
+      password:
+        from_secret: registry_password
+      repo: foo/bar
+`
+	mfst, err := manifest.ParseString(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	compiler := &Compiler{
+		Environ:  provider.Static(nil),
+		Registry: registry.Static(nil),
+		Secret:   secret.Static(nil),
+	}
+	args := runtime.CompilerArgs{
+		Repo:     &drone.Repo{},
+		Build:    &drone.Build{},
+		Stage:    &drone.Stage{},
+		System:   &drone.System{},
+		Netrc:    &drone.Netrc{},
+		Manifest: mfst,
+		Pipeline: mfst.Resources[0].(*resource.Pipeline),
+		Secret:   secret.Static(nil),
+	}
+
+	ir := compiler.Compile(nocontext, args).(*engine.Spec)
+	var publish *engine.Step
+	for _, step := range ir.Steps {
+		if step.Name == "publish" {
+			publish = step
+			break
+		}
+	}
+	if publish == nil {
+		t.Fatal("publish step not found")
+	}
+	if got := publish.Envs["PLUGIN_ARTIFACT_FILE"]; got != "" {
+		t.Fatalf("did not expect inline PLUGIN_ARTIFACT_FILE, got %q", got)
+	}
+	if got, want := publish.Envs["PLUGIN_FROM_OUTPUT_KEYS"], "artifact_file"; got != want {
+		t.Fatalf("want PLUGIN_FROM_OUTPUT_KEYS %q, got %q", want, got)
+	}
+	if got, want := publish.Envs["PLUGIN_FROM_SECRET_KEYS"], "password"; got != want {
+		t.Fatalf("want PLUGIN_FROM_SECRET_KEYS %q, got %q", want, got)
+	}
+	if got, want := publish.Envs["PLUGIN_REPO"], "foo/bar"; got != want {
+		t.Fatalf("want PLUGIN_REPO %q, got %q", want, got)
+	}
+	ref, ok := publish.OutputSettings["PLUGIN_ARTIFACT_FILE"]
+	if !ok {
+		t.Fatal("expected PLUGIN_ARTIFACT_FILE output setting reference")
+	}
+	if ref.Step != "build" || ref.Key != "artifact_file" {
+		t.Fatalf("unexpected output setting ref: %+v", ref)
+	}
+}
+
 func TestCompile_OutputTransportAutoRequiresRunnerSocketRoot(t *testing.T) {
 	svc := outputservice.New(0)
 	defer svc.Close()
