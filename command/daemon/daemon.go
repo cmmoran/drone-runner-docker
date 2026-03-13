@@ -124,6 +124,7 @@ func (c *daemonCommand) run(*kingpin.ParseContext) error {
 	logrus.AddHook(hook)
 	outputSvc := outputservice.New(config.Output.TTL)
 	defer outputSvc.Close()
+	outputHTTPURL := configuredOutputHTTPURL(config)
 	var executablePath string
 	if config.Runner.Image == "" {
 		executablePath, err = installOutputHelper()
@@ -202,7 +203,7 @@ func (c *daemonCommand) run(*kingpin.ParseContext) error {
 			OutputService:    outputSvc,
 			OutputTransport:  config.Output.Transport,
 			OutputSocketRoot: config.Output.SocketRoot,
-			OutputHTTPURL:    config.Output.HTTPAdvertise,
+			OutputHTTPURL:    outputHTTPURL,
 		},
 		Exec: outputexec.New(
 			tracer,

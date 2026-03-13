@@ -200,3 +200,10 @@ func fromEnviron() (Config, error) {
 
 	return config, nil
 }
+
+func configuredOutputHTTPURL(config Config) string {
+	if config.Output.HTTPBind == "" || config.Output.HTTPAdvertise == "" {
+		return ""
+	}
+	return config.Output.HTTPAdvertise
+}

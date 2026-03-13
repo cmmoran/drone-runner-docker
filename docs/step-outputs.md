@@ -22,6 +22,47 @@ This feature does not require Drone server changes.
 - no cross-stage or cross-runner sharing
 - no Windows support
 
+## Runner Configuration
+
+Current transport modes:
+
+- `DRONE_OUTPUT_TRANSPORT=file`
+- `DRONE_OUTPUT_TRANSPORT=auto`
+- `DRONE_OUTPUT_TRANSPORT=unix`
+- `DRONE_OUTPUT_TRANSPORT=http`
+
+Recommended rollout remains `file` until IPC is explicitly enabled and tested.
+
+### Unix Mode
+
+Unix IPC requires all of the following:
+
+- the runner must inject the `drone-output` helper
+- `DRONE_OUTPUT_SOCKET_ROOT` must exist inside the runner container
+- `DRONE_RUNNER_VOLUMES` must map the same host path into step containers at that same target path
+
+Example:
+
+```text
+DRONE_OUTPUT_TRANSPORT=auto
+DRONE_OUTPUT_SOCKET_ROOT=/drone/outputs
+DRONE_RUNNER_VOLUMES=/srv/data/platform/tools/drone-runner/drone-outputs:/drone/outputs
+```
+
+If the shared socket root is not present inside the runner, the compiler falls
+back to `file` mode.
+
+### HTTP Mode
+
+HTTP IPC requires:
+
+- `DRONE_OUTPUT_TRANSPORT=http` or `auto`
+- `DRONE_OUTPUT_HTTP_BIND`
+- `DRONE_OUTPUT_HTTP_ADVERTISE`
+
+The runner only injects HTTP output transport when both bind and advertise are
+configured.
+
 ## User Experience
 
 Producer:

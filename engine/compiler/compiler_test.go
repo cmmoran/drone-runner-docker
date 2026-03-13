@@ -233,7 +233,7 @@ steps:
 		OutputTransport:  "auto",
 		OutputSocketRoot: socketRoot,
 		Volumes: map[string]string{
-			socketRoot: "/drone/outputs",
+			socketRoot: socketRoot,
 		},
 	}
 	args := runtime.CompilerArgs{
@@ -434,6 +434,110 @@ steps:
 	}
 	if got := publish.Envs["DRONE_OUTPUT_TOKEN"]; got != "" {
 		t.Fatalf("did not expect DRONE_OUTPUT_TOKEN without helper, got %q", got)
+	}
+}
+
+func TestCompile_OutputTransportAutoRequiresRunnerSocketRoot(t *testing.T) {
+	svc := outputservice.New(0)
+	defer svc.Close()
+
+	socketRoot := filepath.Join(t.TempDir(), "missing")
+	raw := `
+kind: pipeline
+type: docker
+name: default
+
+steps:
+  - name: publish
+    image: alpine
+`
+	mfst, err := manifest.ParseString(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	compiler := &Compiler{
+		Environ:          provider.Static(nil),
+		Registry:         registry.Static(nil),
+		Secret:           secret.Static(nil),
+		ExecutablePath:   "/tmp/drone-output",
+		OutputService:    svc,
+		OutputTransport:  "auto",
+		OutputSocketRoot: socketRoot,
+		Volumes: map[string]string{
+			"/srv/drone-outputs": socketRoot,
+		},
+	}
+	args := runtime.CompilerArgs{
+		Repo:     &drone.Repo{ID: 1},
+		Build:    &drone.Build{ID: 2},
+		Stage:    &drone.Stage{ID: 3},
+		System:   &drone.System{},
+		Netrc:    &drone.Netrc{},
+		Manifest: mfst,
+		Pipeline: mfst.Resources[0].(*resource.Pipeline),
+		Secret:   secret.Static(nil),
+	}
+
+	ir := compiler.Compile(nocontext, args).(*engine.Spec)
+	if got, want := ir.OutputTransport, "file"; got != want {
+		t.Fatalf("want output transport %q, got %q", want, got)
+	}
+	var publish *engine.Step
+	for _, step := range ir.Steps {
+		if step.Name == "publish" {
+			publish = step
+			break
+		}
+	}
+	if publish == nil {
+		t.Fatal("publish step not found")
+	}
+	if got := publish.Envs["DRONE_OUTPUT_TRANSPORT"]; got != "" {
+		t.Fatalf("did not expect DRONE_OUTPUT_TRANSPORT without runner socket root, got %q", got)
+	}
+}
+
+func TestCompile_OutputTransportHTTPRequiresAdvertiseURL(t *testing.T) {
+	svc := outputservice.New(0)
+	defer svc.Close()
+
+	raw := `
+kind: pipeline
+type: docker
+name: default
+
+steps:
+  - name: publish
+    image: alpine
+`
+	mfst, err := manifest.ParseString(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	compiler := &Compiler{
+		Environ:         provider.Static(nil),
+		Registry:        registry.Static(nil),
+		Secret:          secret.Static(nil),
+		ExecutablePath:  "/tmp/drone-output",
+		OutputService:   svc,
+		OutputTransport: "http",
+	}
+	args := runtime.CompilerArgs{
+		Repo:     &drone.Repo{ID: 1},
+		Build:    &drone.Build{ID: 2},
+		Stage:    &drone.Stage{ID: 3},
+		System:   &drone.System{},
+		Netrc:    &drone.Netrc{},
+		Manifest: mfst,
+		Pipeline: mfst.Resources[0].(*resource.Pipeline),
+		Secret:   secret.Static(nil),
+	}
+
+	ir := compiler.Compile(nocontext, args).(*engine.Spec)
+	if got, want := ir.OutputTransport, "file"; got != want {
+		t.Fatalf("want output transport %q, got %q", want, got)
 	}
 }
 

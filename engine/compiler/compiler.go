@@ -267,12 +267,20 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 	envs["DRONE_WORKSPACE_PATH"] = path
 	defaultOutputRoot := ".drone-outputs"
 	outputRoot := stdpath.Join(full, defaultOutputRoot)
+	sharedOutputTarget := c.OutputSocketRoot
+	if sharedOutputTarget == "" {
+		sharedOutputTarget = "/drone/outputs"
+	}
 	outputHostBase := ""
 	for hostPath, targetPath := range c.Volumes {
-		if strings.TrimSuffix(targetPath, ":ro") == "/drone/outputs" {
+		if strings.TrimSuffix(targetPath, ":ro") == sharedOutputTarget {
 			outputHostBase = hostPath
 			break
 		}
+	}
+	outputSocketRootReady := false
+	if info, err := os.Stat(sharedOutputTarget); err == nil && info.IsDir() {
+		outputSocketRootReady = true
 	}
 	sharedOutputRoot := ""
 	outputMode := strings.ToLower(strings.TrimSpace(c.OutputTransport))
@@ -281,7 +289,7 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 	}
 	if outputMode == "auto" {
 		switch {
-		case c.OutputService != nil && c.OutputSocketRoot != "" && outputHostBase != "":
+		case c.OutputService != nil && outputSocketRootReady && outputHostBase != "":
 			outputMode = "unix"
 		case c.OutputService != nil && c.OutputHTTPURL != "":
 			outputMode = "http"
@@ -364,8 +372,8 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 	if helperEnabled {
 		switch outputMode {
 		case "unix":
-			if outputHostBase != "" && c.OutputSocketRoot != "" {
-				sharedOutputRoot = stdpath.Join(c.OutputSocketRoot, random())
+			if c.OutputService != nil && outputSocketRootReady && outputHostBase != "" {
+				sharedOutputRoot = stdpath.Join(sharedOutputTarget, random())
 				spec.OutputDir = sharedOutputRoot
 				socketPath := stdpath.Join(sharedOutputRoot, "outputs.sock")
 				closer, err := outputtransport.ListenUnix(socketPath, c.OutputService)
@@ -380,13 +388,16 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 				spec.OutputTransport = outputMode
 			}
 		case "http":
-			spec.OutputDir = ""
+			if c.OutputService != nil && c.OutputHTTPURL != "" {
+				spec.OutputDir = ""
+			} else {
+				outputMode = "file"
+				spec.OutputTransport = outputMode
+			}
 		}
 		if outputMode == "file" {
-			if outputHostBase != "" {
-				if info, err := os.Stat("/drone/outputs"); err == nil && info.IsDir() {
-					sharedOutputRoot = stdpath.Join("/drone/outputs", random())
-				}
+			if outputHostBase != "" && outputSocketRootReady {
+				sharedOutputRoot = stdpath.Join(sharedOutputTarget, random())
 			}
 			if sharedOutputRoot != "" {
 				spec.OutputDir = sharedOutputRoot
