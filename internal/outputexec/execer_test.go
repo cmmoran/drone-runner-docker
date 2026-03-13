@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/drone-runners/drone-runner-docker/engine"
+	"github.com/drone-runners/drone-runner-docker/internal/outputproto"
+	"github.com/drone-runners/drone-runner-docker/internal/outputservice"
 	"github.com/drone-runners/drone-runner-docker/internal/stepoutput"
 
 	"github.com/drone/drone-go/drone"
@@ -57,6 +59,60 @@ func TestExec_PropagatesStepOutputs(t *testing.T) {
 
 	fake := &fakeEngine{}
 	exec := New(pipeline.NopReporter(), pipeline.NopStreamer(), pipeline.NopUploader(), fake, 0, nil)
+	if err := exec.Exec(context.Background(), spec, state); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.publishVersion; got != "1.2.3" {
+		t.Fatalf("want VERSION=1.2.3, got %q", got)
+	}
+}
+
+func TestExec_ResolvesOutputsFromService(t *testing.T) {
+	svc := outputservice.New(0)
+	defer svc.Close()
+	svc.RegisterPipeline("1/2/3", map[string]string{"build": "token-build"})
+	version := "1.2.3"
+	if err := svc.Apply("token-build", []outputproto.OutputOp{{
+		Op:    outputproto.OpSet,
+		Key:   "version",
+		Value: &version,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	spec := &engine.Spec{
+		PipelineID:      "1/2/3",
+		OutputTransport: "unix",
+		Steps: []*engine.Step{
+			{
+				Name: "build",
+			},
+			{
+				Name:      "publish",
+				DependsOn: []string{"build"},
+				Envs:      map[string]string{},
+				OutputEnvs: map[string]stepoutput.OutputRef{
+					"VERSION": {Step: "build", Key: "version"},
+				},
+			},
+		},
+	}
+
+	state := &pipeline.State{
+		Build: &drone.Build{},
+		Repo:  &drone.Repo{},
+		Stage: &drone.Stage{
+			Status: drone.StatusPending,
+			Steps: []*drone.Step{
+				{Name: "build", Status: drone.StatusPending},
+				{Name: "publish", Status: drone.StatusPending},
+			},
+		},
+		System: &drone.System{},
+	}
+
+	fake := &fakeEngine{}
+	exec := New(pipeline.NopReporter(), pipeline.NopStreamer(), pipeline.NopUploader(), fake, 0, svc)
 	if err := exec.Exec(context.Background(), spec, state); err != nil {
 		t.Fatal(err)
 	}

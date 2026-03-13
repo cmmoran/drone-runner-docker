@@ -12,12 +12,15 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 
 	"github.com/dchest/uniuri"
 	"github.com/drone-runners/drone-runner-docker/engine"
 	"github.com/drone-runners/drone-runner-docker/engine/resource"
+	"github.com/drone-runners/drone-runner-docker/internal/outputproto"
+	"github.com/drone-runners/drone-runner-docker/internal/outputservice"
 	"github.com/drone/drone-go/drone"
 	"github.com/drone/runner-go/environ/provider"
 	"github.com/drone/runner-go/manifest"
@@ -196,6 +199,182 @@ steps:
 	}
 	if got, want := publish.Envs["DRONE_OUTPUT_DIR"], "/drone/src/custom-outputs/publish"; got != want {
 		t.Fatalf("want DRONE_OUTPUT_DIR %q, got %q", want, got)
+	}
+}
+
+func TestCompile_OutputTransportUnix(t *testing.T) {
+	random = notRandom
+	defer func() { random = uniuri.New }()
+
+	socketRoot := t.TempDir()
+	svc := outputservice.New(0)
+	defer svc.Close()
+
+	raw := `
+kind: pipeline
+type: docker
+name: default
+
+steps:
+  - name: publish
+    image: alpine
+`
+	mfst, err := manifest.ParseString(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	compiler := &Compiler{
+		Environ:          provider.Static(nil),
+		Registry:         registry.Static(nil),
+		Secret:           secret.Static(nil),
+		ExecutablePath:   "/tmp/drone-output",
+		OutputService:    svc,
+		OutputTransport:  "auto",
+		OutputSocketRoot: socketRoot,
+		Volumes: map[string]string{
+			socketRoot: "/drone/outputs",
+		},
+	}
+	args := runtime.CompilerArgs{
+		Repo:     &drone.Repo{ID: 1},
+		Build:    &drone.Build{ID: 2},
+		Stage:    &drone.Stage{ID: 3},
+		System:   &drone.System{},
+		Netrc:    &drone.Netrc{},
+		Manifest: mfst,
+		Pipeline: mfst.Resources[0].(*resource.Pipeline),
+		Secret:   secret.Static(nil),
+	}
+
+	ir := compiler.Compile(nocontext, args).(*engine.Spec)
+	defer func() {
+		if ir.OutputCloser != nil {
+			_ = ir.OutputCloser.Close()
+		}
+	}()
+
+	if got, want := ir.OutputTransport, "unix"; got != want {
+		t.Fatalf("want output transport %q, got %q", want, got)
+	}
+	if got, want := ir.PipelineID, "1/2/3"; got != want {
+		t.Fatalf("want pipeline id %q, got %q", want, got)
+	}
+	if ir.OutputCloser == nil {
+		t.Fatal("expected unix output listener")
+	}
+
+	var publish *engine.Step
+	for _, step := range ir.Steps {
+		if step.Name == "publish" {
+			publish = step
+			break
+		}
+	}
+	if publish == nil {
+		t.Fatal("publish step not found")
+	}
+	if got, want := publish.Envs["DRONE_OUTPUT_TRANSPORT"], "unix"; got != want {
+		t.Fatalf("want DRONE_OUTPUT_TRANSPORT %q, got %q", want, got)
+	}
+	if got, want := publish.Envs["DRONE_OUTPUT_SOCKET"], filepath.Join(socketRoot, "random", "outputs.sock"); got != want {
+		t.Fatalf("want DRONE_OUTPUT_SOCKET %q, got %q", want, got)
+	}
+	if got := publish.Envs["DRONE_OUTPUT_DIR"]; got != "" {
+		t.Fatalf("did not expect DRONE_OUTPUT_DIR in unix mode, got %q", got)
+	}
+	token := publish.Envs["DRONE_OUTPUT_TOKEN"]
+	if token == "" {
+		t.Fatal("expected DRONE_OUTPUT_TOKEN to be injected")
+	}
+	version := "1.2.3"
+	if err := svc.Apply(token, []outputproto.OutputOp{{
+		Op:    outputproto.OpSet,
+		Key:   "version",
+		Value: &version,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := svc.Resolve("1/2/3", "publish", "version"); err != nil {
+		t.Fatal(err)
+	} else if !ok || got != "1.2.3" {
+		t.Fatalf("want resolved version 1.2.3, got %q ok=%v", got, ok)
+	}
+}
+
+func TestCompile_OutputTransportHTTP(t *testing.T) {
+	svc := outputservice.New(0)
+	defer svc.Close()
+
+	raw := `
+kind: pipeline
+type: docker
+name: default
+
+steps:
+  - name: publish
+    image: alpine
+`
+	mfst, err := manifest.ParseString(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	compiler := &Compiler{
+		Environ:         provider.Static(nil),
+		Registry:        registry.Static(nil),
+		Secret:          secret.Static(nil),
+		ExecutablePath:  "/tmp/drone-output",
+		OutputService:   svc,
+		OutputTransport: "http",
+		OutputHTTPURL:   "http://runner.internal:3001/outputs",
+	}
+	args := runtime.CompilerArgs{
+		Repo:     &drone.Repo{ID: 1},
+		Build:    &drone.Build{ID: 2},
+		Stage:    &drone.Stage{ID: 3},
+		System:   &drone.System{},
+		Netrc:    &drone.Netrc{},
+		Manifest: mfst,
+		Pipeline: mfst.Resources[0].(*resource.Pipeline),
+		Secret:   secret.Static(nil),
+	}
+
+	ir := compiler.Compile(nocontext, args).(*engine.Spec)
+	if got, want := ir.OutputTransport, "http"; got != want {
+		t.Fatalf("want output transport %q, got %q", want, got)
+	}
+	if got, want := ir.PipelineID, "1/2/3"; got != want {
+		t.Fatalf("want pipeline id %q, got %q", want, got)
+	}
+	if ir.OutputDir != "" {
+		t.Fatalf("did not expect output dir in http mode, got %q", ir.OutputDir)
+	}
+
+	var publish *engine.Step
+	for _, step := range ir.Steps {
+		if step.Name == "publish" {
+			publish = step
+			break
+		}
+	}
+	if publish == nil {
+		t.Fatal("publish step not found")
+	}
+	if got, want := publish.Envs["DRONE_OUTPUT_TRANSPORT"], "http"; got != want {
+		t.Fatalf("want DRONE_OUTPUT_TRANSPORT %q, got %q", want, got)
+	}
+	if got, want := publish.Envs["DRONE_OUTPUT_URL"], "http://runner.internal:3001/outputs"; got != want {
+		t.Fatalf("want DRONE_OUTPUT_URL %q, got %q", want, got)
+	}
+	if got := publish.Envs["DRONE_OUTPUT_SOCKET"]; got != "" {
+		t.Fatalf("did not expect DRONE_OUTPUT_SOCKET in http mode, got %q", got)
+	}
+	if got := publish.Envs["DRONE_OUTPUT_DIR"]; got != "" {
+		t.Fatalf("did not expect DRONE_OUTPUT_DIR in http mode, got %q", got)
+	}
+	if publish.Envs["DRONE_OUTPUT_TOKEN"] == "" {
+		t.Fatal("expected DRONE_OUTPUT_TOKEN to be injected")
 	}
 }
 
