@@ -1,9 +1,16 @@
 package command
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
+	"strings"
 
+	"github.com/drone-runners/drone-runner-docker/internal/outputproto"
 	"github.com/drone-runners/drone-runner-docker/internal/stepoutput"
 
 	"gopkg.in/alecthomas/kingpin.v2"
@@ -27,10 +34,6 @@ type outputUnsetCommand struct {
 }
 
 func (c *outputSetCommand) run(*kingpin.ParseContext) error {
-	dir, err := outputDir()
-	if err != nil {
-		return err
-	}
 	value, _, err := stepoutput.ParseSetValue(c.value, c.format)
 	if err != nil {
 		return err
@@ -39,14 +42,10 @@ func (c *outputSetCommand) run(*kingpin.ParseContext) error {
 	if err != nil {
 		return err
 	}
-	return stepoutput.ApplyPatch(dir, patch)
+	return sendPatch(patch)
 }
 
 func (c *outputPutCommand) run(*kingpin.ParseContext) error {
-	dir, err := outputDir()
-	if err != nil {
-		return err
-	}
 	value, err := stepoutput.ParsePutFile(c.path, c.format)
 	if err != nil {
 		return err
@@ -55,15 +54,11 @@ func (c *outputPutCommand) run(*kingpin.ParseContext) error {
 	if err != nil {
 		return err
 	}
-	return stepoutput.ApplyPatch(dir, patch)
+	return sendPatch(patch)
 }
 
 func (c *outputUnsetCommand) run(*kingpin.ParseContext) error {
-	dir, err := outputDir()
-	if err != nil {
-		return err
-	}
-	return stepoutput.Unset(dir, c.key)
+	return sendPatch(stepoutput.Patch{c.key: nil})
 }
 
 func registerOutput(app *kingpin.Application) {
@@ -112,4 +107,100 @@ func outputDir() (string, error) {
 		return "", fmt.Errorf("DRONE_OUTPUT_DIR is not set")
 	}
 	return dir, nil
+}
+
+func sendPatch(patch stepoutput.Patch) error {
+	switch strings.ToLower(os.Getenv("DRONE_OUTPUT_TRANSPORT")) {
+	case "", "file":
+		dir, err := outputDir()
+		if err != nil {
+			return err
+		}
+		return stepoutput.ApplyPatch(dir, patch)
+	case "unix":
+		return sendRequest(newRequest(patch), unixSender{})
+	case "http":
+		return sendRequest(newRequest(patch), httpSender{})
+	default:
+		return fmt.Errorf("unsupported output transport: %s", os.Getenv("DRONE_OUTPUT_TRANSPORT"))
+	}
+}
+
+func newRequest(patch stepoutput.Patch) outputproto.Request {
+	return outputproto.Request{
+		Version: outputproto.Version,
+		Token:   os.Getenv("DRONE_OUTPUT_TOKEN"),
+		Ops:     stepoutput.PatchToOps(patch),
+	}
+}
+
+type outputSender interface {
+	Send(outputproto.Request) error
+}
+
+type unixSender struct{}
+
+func (unixSender) Send(req outputproto.Request) error {
+	if err := req.Validate(); err != nil {
+		return err
+	}
+	socketPath := os.Getenv("DRONE_OUTPUT_SOCKET")
+	if socketPath == "" {
+		return fmt.Errorf("DRONE_OUTPUT_SOCKET is not set")
+	}
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := json.NewEncoder(conn).Encode(req); err != nil {
+		return err
+	}
+	var resp outputproto.Response
+	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&resp); err != nil {
+		return err
+	}
+	if !resp.OK {
+		if resp.Error == "" {
+			resp.Error = "output request failed"
+		}
+		return fmt.Errorf("%s", resp.Error)
+	}
+	return nil
+}
+
+type httpSender struct{}
+
+func (httpSender) Send(req outputproto.Request) error {
+	if err := req.Validate(); err != nil {
+		return err
+	}
+	url := os.Getenv("DRONE_OUTPUT_URL")
+	if url == "" {
+		return fmt.Errorf("DRONE_OUTPUT_URL is not set")
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	var outputResp outputproto.Response
+	if err := json.NewDecoder(resp.Body).Decode(&outputResp); err != nil {
+		return err
+	}
+	if !outputResp.OK {
+		if outputResp.Error == "" {
+			outputResp.Error = "output request failed"
+		}
+		return fmt.Errorf("%s", outputResp.Error)
+	}
+	return nil
+}
+
+func sendRequest(req outputproto.Request, sender outputSender) error {
+	return sender.Send(req)
 }
