@@ -27,8 +27,8 @@ func TestExec_PropagatesStepOutputs(t *testing.T) {
 		Steps: []*engine.Step{
 			{
 				Name:      "build",
-				Envs:      map[string]string{"DRONE_OUTPUT_DIR": "/drone/outputs/build"},
-				OutputDir: "/drone/outputs/build",
+				Envs:      map[string]string{"DRONE_OUTPUT_DIR": filepath.Join(outputDir, "build")},
+				OutputDir: filepath.Join(outputDir, "build"),
 			},
 			{
 				Name:      "publish",
@@ -74,7 +74,10 @@ func (*fakeEngine) Destroy(context.Context, runtime.Spec) error { return nil }
 func (f *fakeEngine) Run(_ context.Context, spec runtime.Spec, step runtime.Step, _ io.Writer) (*runtime.State, error) {
 	engineStep := step.(*engine.Step)
 	if engineStep.Name == "build" {
-		dir := filepath.Join(spec.(*engine.Spec).OutputDir, "build")
+		dir := engineStep.OutputDir
+		if dir == "" {
+			dir = filepath.Join(spec.(*engine.Spec).OutputDir, "build")
+		}
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, err
 		}

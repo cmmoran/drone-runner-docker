@@ -143,6 +143,62 @@ func TestCompile_Secrets(t *testing.T) {
 	}
 }
 
+func TestCompile_OutputDirOverride(t *testing.T) {
+	raw := `
+kind: pipeline
+type: docker
+name: default
+
+steps:
+  - name: publish
+    image: alpine
+    environment:
+      DRONE_OUTPUT_DIR: custom-outputs
+`
+	mfst, err := manifest.ParseString(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	compiler := &Compiler{
+		Environ:        provider.Static(nil),
+		Registry:       registry.Static(nil),
+		Secret:         secret.Static(nil),
+		ExecutablePath: "/tmp/drone-output",
+	}
+	args := runtime.CompilerArgs{
+		Repo:     &drone.Repo{},
+		Build:    &drone.Build{},
+		Stage:    &drone.Stage{},
+		System:   &drone.System{},
+		Netrc:    &drone.Netrc{},
+		Manifest: mfst,
+		Pipeline: mfst.Resources[0].(*resource.Pipeline),
+		Secret:   secret.Static(nil),
+	}
+
+	ir := compiler.Compile(nocontext, args).(*engine.Spec)
+	if got, want := ir.OutputDir, "/drone/src/.drone-outputs"; got != want {
+		t.Fatalf("want output root %q, got %q", want, got)
+	}
+	var publish *engine.Step
+	for _, step := range ir.Steps {
+		if step.Name == "publish" {
+			publish = step
+			break
+		}
+	}
+	if publish == nil {
+		t.Fatal("publish step not found")
+	}
+	if got, want := publish.OutputDir, "/drone/src/custom-outputs/publish"; got != want {
+		t.Fatalf("want step output dir %q, got %q", want, got)
+	}
+	if got, want := publish.Envs["DRONE_OUTPUT_DIR"], "/drone/src/custom-outputs/publish"; got != want {
+		t.Fatalf("want DRONE_OUTPUT_DIR %q, got %q", want, got)
+	}
+}
+
 // This test verifies that step labels are generated correctly
 func TestCompile_StepLabels(t *testing.T) {
 	manifest, _ := manifest.ParseFile("testdata/steps.yml")

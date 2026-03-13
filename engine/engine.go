@@ -5,15 +5,19 @@
 package engine
 
 import (
+	"archive/tar"
 	"context"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/drone-runners/drone-runner-docker/internal/docker/errors"
 	droneimage "github.com/drone-runners/drone-runner-docker/internal/docker/image"
 	"github.com/drone-runners/drone-runner-docker/internal/docker/jsonmessage"
 	"github.com/drone-runners/drone-runner-docker/internal/docker/stdcopy"
+	"github.com/drone-runners/drone-runner-docker/internal/stepoutput"
 	"github.com/drone/runner-go/logger"
 	"github.com/drone/runner-go/pipeline/runtime"
 	"github.com/drone/runner-go/registry/auths"
@@ -25,6 +29,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
+	derrdefs "github.com/docker/docker/errdefs"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -55,6 +60,7 @@ type dockerClient interface {
 	ContainerWait(ctx context.Context, containerID string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error)
 	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
 	ContainerLogs(ctx context.Context, containerID string, options container.LogsOptions) (io.ReadCloser, error)
+	CopyFromContainer(ctx context.Context, containerID, srcPath string) (io.ReadCloser, container.PathStat, error)
 }
 
 // New returns a new engine.
@@ -67,7 +73,10 @@ func New(client dockerClient, opts Opts) *Docker {
 
 // NewEnv returns a new Engine from the environment.
 func NewEnv(opts Opts) (*Docker, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv)
+	cli, err := client.NewClientWithOpts(
+		client.FromEnv,
+		client.WithAPIVersionNegotiation(),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -80,9 +89,95 @@ func (e *Docker) Ping(ctx context.Context) error {
 	return err
 }
 
+func (e *Docker) CopyOutputs(ctx context.Context, step *Step) (map[string]string, error) {
+	if step.OutputDir == "" {
+		return map[string]string{}, nil
+	}
+
+	rc, _, err := e.client.CopyFromContainer(ctx, step.ID, step.OutputDir)
+	if err != nil {
+		if derrdefs.IsNotFound(err) || cerrdefs.IsNotFound(err) {
+			return map[string]string{}, nil
+		}
+		return nil, err
+	}
+	defer rc.Close()
+
+	dir, err := os.MkdirTemp("", "drone-step-outputs-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+
+	tr := tar.NewReader(rc)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		rel := trimArchiveRoot(hdr.Name)
+		if rel == "" {
+			continue
+		}
+		target := filepath.Join(dir, rel)
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return nil, err
+			}
+		case tar.TypeReg, tar.TypeRegA:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return nil, err
+			}
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(hdr.Mode))
+			if err != nil {
+				return nil, err
+			}
+			if _, err := io.Copy(f, tr); err != nil {
+				f.Close()
+				return nil, err
+			}
+			if err := f.Close(); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return stepoutput.Load(dir)
+}
+
+func trimArchiveRoot(name string) string {
+	name = strings.TrimPrefix(filepath.Clean(name), string(filepath.Separator))
+	if name == "." || name == "" {
+		return ""
+	}
+	parts := strings.Split(name, string(filepath.Separator))
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return filepath.Join(parts[1:]...)
+}
+
 // Setup the pipeline environment.
 func (e *Docker) Setup(ctx context.Context, specv runtime.Spec) error {
 	spec := specv.(*Spec)
+
+	if spec.OutputDir != "" && strings.HasPrefix(spec.OutputDir, "/drone/outputs/") {
+		if err := os.MkdirAll(spec.OutputDir, 0o755); err != nil {
+			return err
+		}
+		for _, step := range spec.Steps {
+			if step.OutputDir != "" && strings.HasPrefix(step.OutputDir, spec.OutputDir+"/") {
+				if err := os.MkdirAll(step.OutputDir, 0o755); err != nil {
+					return err
+				}
+			}
+		}
+	}
 
 	// creates the default temporary (local) volumes
 	// that are mounted into each container step.

@@ -1,11 +1,15 @@
 package engine
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
@@ -13,6 +17,49 @@ import (
 	"github.com/docker/docker/api/types/volume"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
+
+func TestCopyOutputs(t *testing.T) {
+	client := newMockDockerClient()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{Name: "build", Mode: 0o755, Typeflag: tar.TypeDir}); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("1.2.3")
+	if err := tw.WriteHeader(&tar.Header{Name: "build/version", Mode: 0o644, Size: int64(len(data)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	client.copyReader = io.NopCloser(bytes.NewReader(buf.Bytes()))
+
+	engine := New(client, Opts{})
+	got, err := engine.CopyOutputs(context.Background(), &Step{ID: "build-id", OutputDir: "/drone/src/.drone-outputs/build"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["version"] != "1.2.3" {
+		t.Fatalf("want version 1.2.3, got %q", got["version"])
+	}
+}
+
+func TestCopyOutputs_MissingPathReturnsEmpty(t *testing.T) {
+	client := newMockDockerClient()
+	client.copyErr = cerrdefs.ErrNotFound
+
+	engine := New(client, Opts{})
+	got, err := engine.CopyOutputs(context.Background(), &Step{ID: "build-id", OutputDir: "/drone/src/.drone-outputs/clone"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("want no outputs, got %#v", got)
+	}
+}
 
 func TestDestroy_StopsContainersGracefully(t *testing.T) {
 	client := newMockDockerClient()
@@ -70,9 +117,11 @@ func TestDestroy_KillsContainerWhenGracefulStopFails(t *testing.T) {
 }
 
 type mockDockerClient struct {
-	stopErr   error
-	stopCalls []stopCall
-	killCalls []killCall
+	stopErr    error
+	stopCalls  []stopCall
+	killCalls  []killCall
+	copyReader io.ReadCloser
+	copyErr    error
 }
 
 type stopCall struct {
@@ -151,4 +200,14 @@ func (*mockDockerClient) ContainerInspect(context.Context, string) (container.In
 
 func (*mockDockerClient) ContainerLogs(context.Context, string, container.LogsOptions) (io.ReadCloser, error) {
 	return nil, nil
+}
+
+func (m *mockDockerClient) CopyFromContainer(context.Context, string, string) (io.ReadCloser, container.PathStat, error) {
+	if m.copyErr != nil {
+		return nil, container.PathStat{}, m.copyErr
+	}
+	if m.copyReader != nil {
+		return m.copyReader, container.PathStat{}, nil
+	}
+	return io.NopCloser(strings.NewReader("")), container.PathStat{}, nil
 }

@@ -5,6 +5,7 @@
 package engine
 
 import (
+	"os"
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
@@ -157,6 +158,9 @@ func toVolumeSet(spec *Spec, step *Step) map[string]struct{} {
 		if isBindMount(volume) == false {
 			continue
 		}
+		if isFileBindMount(volume) {
+			continue
+		}
 		set[mount.Path] = struct{}{}
 	}
 	return set
@@ -181,6 +185,9 @@ func toVolumeSlice(spec *Spec, step *Step) []string {
 			to = append(to, path)
 		}
 		if isBindMount(volume) {
+			if isFileBindMount(volume) {
+				continue
+			}
 			path := volume.HostPath.Path + ":" + mount.Path
 			to = append(to, path)
 		}
@@ -198,7 +205,7 @@ func toVolumeMounts(spec *Spec, step *Step) []mount.Mount {
 			continue
 		}
 
-		if isBindMount(source) && !isDevice(source) {
+		if isBindMount(source) && !isDevice(source) && !isFileBindMount(source) {
 			continue
 		}
 
@@ -278,6 +285,17 @@ func isUnlimited(res *Step) bool {
 // returns true if the volume is a bind mount.
 func isBindMount(volume *Volume) bool {
 	return volume.HostPath != nil
+}
+
+func isFileBindMount(volume *Volume) bool {
+	if volume == nil || volume.HostPath == nil {
+		return false
+	}
+	info, err := os.Stat(volume.HostPath.Path)
+	if err != nil {
+		return false
+	}
+	return info.Mode().IsRegular()
 }
 
 // returns true if the volume is in-memory.

@@ -43,6 +43,7 @@ type Config struct {
 
 	Runner struct {
 		Name        string            `envconfig:"DRONE_RUNNER_NAME"`
+		Image       string            `envconfig:"DRONE_RUNNER_IMAGE"`
 		Capacity    int               `envconfig:"DRONE_RUNNER_CAPACITY" default:"2"`
 		Procs       int64             `envconfig:"DRONE_RUNNER_MAX_PROCS"`
 		Environ     map[string]string `envconfig:"DRONE_RUNNER_ENVIRON"`

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 
 	"github.com/drone-runners/drone-runner-docker/engine"
@@ -267,7 +266,34 @@ func (e *Execer) injectOutputs(step *engine.Step) error {
 }
 
 func (e *Execer) collectOutputs(spec *engine.Spec, step *engine.Step) error {
-	dir := filepath.Join(spec.OutputDir, step.Name)
+	dir := step.OutputDir
+	if dir == "" {
+		dir = spec.OutputDir
+	}
+	if dir != "" {
+		if _, err := os.Stat(dir); err == nil {
+			values, err := stepoutput.Load(dir)
+			if err != nil {
+				return err
+			}
+			e.mu.Lock()
+			e.outputs[step.Name] = values
+			e.mu.Unlock()
+			return nil
+		}
+	}
+	if collector, ok := e.engine.(interface {
+		CopyOutputs(context.Context, *engine.Step) (map[string]string, error)
+	}); ok {
+		values, err := collector.CopyOutputs(noContext, step)
+		if err != nil {
+			return err
+		}
+		e.mu.Lock()
+		e.outputs[step.Name] = values
+		e.mu.Unlock()
+		return nil
+	}
 	values, err := stepoutput.Load(dir)
 	if err != nil {
 		return err

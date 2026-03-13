@@ -109,9 +109,8 @@ Every Linux step container silently receives:
 
 - a static Go binary mounted at:
   - `/drone/bin/drone-output`
-  - `/usr/local/bin/drone-output`
-  - `/bin/drone-output`
-- `DRONE_OUTPUT_DIR=/drone/outputs/<step-name>`
+- `DRONE_OUTPUT_DIR=.drone-outputs` by default
+- the effective per-step output path is `$DRONE_WORKSPACE/$DRONE_OUTPUT_DIR/<step-name>`
 
 User images do not need modification.
 
@@ -459,8 +458,7 @@ Negative index resolution happens only when consuming via `from_output`.
 
 The storage mechanism is an implementation detail:
 
-- shared outputs volume for the pipeline
-- per-step subdirectories under `/drone/outputs/<step-name>`
+- per-step subdirectories under `$DRONE_WORKSPACE/$DRONE_OUTPUT_DIR/<step-name>`
 - helper writes files there
 - runner reads them after successful step completion
 

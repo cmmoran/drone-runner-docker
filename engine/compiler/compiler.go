@@ -7,6 +7,8 @@ package compiler
 import (
 	"context"
 	"os"
+	stdpath "path"
+	"path/filepath"
 	"strings"
 
 	"github.com/drone-runners/drone-runner-docker/engine"
@@ -127,6 +129,10 @@ type Compiler struct {
 	// binary on the host. It is mounted into step containers as
 	// the drone-output helper.
 	ExecutablePath string
+
+	// HelperImage is the runner image used to copy the helper
+	// binary into a shared volume for containerized runners.
+	HelperImage string
 }
 
 // Compile compiles the configuration file.
@@ -242,6 +248,28 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 	envs["DRONE_WORKSPACE"] = full
 	envs["DRONE_WORKSPACE_BASE"] = base
 	envs["DRONE_WORKSPACE_PATH"] = path
+	defaultOutputRoot := ".drone-outputs"
+	outputRoot := stdpath.Join(full, defaultOutputRoot)
+	outputHostBase := ""
+	for hostPath, targetPath := range c.Volumes {
+		if strings.TrimSuffix(targetPath, ":ro") == "/drone/outputs" {
+			outputHostBase = hostPath
+			break
+		}
+	}
+	sharedOutputRoot := ""
+	resolveOutputDir := func(step *engine.Step) string {
+		if sharedOutputRoot != "" {
+			return stdpath.Join(sharedOutputRoot, step.Name)
+		}
+		root := defaultOutputRoot
+		if step.Envs != nil {
+			if dir := step.Envs["DRONE_OUTPUT_DIR"]; dir != "" {
+				root = strings.TrimLeft(dir, "/")
+			}
+		}
+		return stdpath.Join(full, root, step.Name)
+	}
 
 	// create volume reference variables
 	if volume.EmptyDir != nil {
@@ -251,35 +279,65 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 	}
 
 	var helperMounts []*engine.VolumeMount
-	if c.ExecutablePath != "" && pipeline.Platform.OS != "windows" {
-		helperID := random()
-		spec.Volumes = append(spec.Volumes, &engine.Volume{
-			HostPath: &engine.VolumeHostPath{
-				ID:   helperID,
-				Name: helperID,
-				Path: c.ExecutablePath,
-			},
-		})
-		helperMounts = []*engine.VolumeMount{
-			{Name: helperID, Path: "/drone/bin/drone-output"},
-			{Name: helperID, Path: "/usr/local/bin/drone-output"},
-			{Name: helperID, Path: "/bin/drone-output"},
-		}
-	}
-	outputMount := &engine.VolumeMount{}
-	if c.ExecutablePath != "" {
-		if outputDir, err := os.MkdirTemp("", "drone-step-outputs-*"); err == nil {
-			spec.OutputDir = outputDir
-			outputID := random()
+	helperEnabled := false
+	if pipeline.Platform.OS != "windows" {
+		switch {
+		case c.HelperImage != "":
+			helperEnabled = true
+			spec.HelperImage = image.Expand(c.HelperImage)
+			helperID := "_output_helper"
 			spec.Volumes = append(spec.Volumes, &engine.Volume{
-				HostPath: &engine.VolumeHostPath{
-					ID:   outputID,
-					Name: outputID,
-					Path: outputDir,
+				EmptyDir: &engine.VolumeEmptyDir{
+					ID:     random(),
+					Name:   helperID,
+					Labels: stageLabels,
 				},
 			})
-			outputMount = &engine.VolumeMount{Name: outputID, Path: "/drone/outputs"}
-			envs["DRONE_OUTPUT_ROOT"] = outputMount.Path
+			spec.Internal = append(spec.Internal, &engine.Step{
+				ID:         random(),
+				Labels:     stageLabels,
+				Pull:       engine.PullIfNotExists,
+				Image:      image.Expand(c.HelperImage),
+				Entrypoint: []string{"/bin/sh", "-c"},
+				Command: []string{
+					"cp /bin/drone-runner-docker /usr/drone/bin/drone-output && chmod 755 /usr/drone/bin/drone-output",
+				},
+				Network: "none",
+				Volumes: []*engine.VolumeMount{
+					{Name: helperID, Path: "/usr/drone/bin"},
+				},
+			})
+			helperMounts = []*engine.VolumeMount{
+				{Name: helperID, Path: "/drone/bin"},
+			}
+		case c.ExecutablePath != "":
+			helperEnabled = true
+			helperID := random()
+			spec.Volumes = append(spec.Volumes, &engine.Volume{
+				HostPath: &engine.VolumeHostPath{
+					ID:   helperID,
+					Name: helperID,
+					Path: c.ExecutablePath,
+				},
+			})
+			helperMounts = []*engine.VolumeMount{
+				{Name: helperID, Path: "/drone/bin/drone-output"},
+			}
+		}
+		if helperEnabled {
+			envs["PATH"] = "/drone/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+		}
+	}
+	if helperEnabled {
+		if outputHostBase != "" {
+			if info, err := os.Stat("/drone/outputs"); err == nil && info.IsDir() {
+				sharedOutputRoot = stdpath.Join("/drone/outputs", random())
+			}
+		}
+		if sharedOutputRoot != "" {
+			spec.OutputDir = sharedOutputRoot
+		} else {
+			spec.OutputDir = outputRoot
 		}
 	}
 
@@ -322,10 +380,9 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		step.Pull = engine.PullIfNotExists
 		step.Volumes = append(step.Volumes, mount)
 		step.Volumes = append(step.Volumes, helperMounts...)
-		if outputMount.Name != "" {
-			step.OutputDir = "/drone/outputs/" + step.Name
+		if helperEnabled {
+			step.OutputDir = resolveOutputDir(step)
 			step.Envs["DRONE_OUTPUT_DIR"] = step.OutputDir
-			step.Volumes = append(step.Volumes, outputMount)
 		}
 		spec.Steps = append(spec.Steps, step)
 
@@ -358,10 +415,9 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		dst.Envs = environ.Combine(envs, dst.Envs)
 		dst.Volumes = append(dst.Volumes, mount)
 		dst.Volumes = append(dst.Volumes, helperMounts...)
-		if outputMount.Name != "" {
-			dst.OutputDir = "/drone/outputs/" + dst.Name
+		if helperEnabled {
+			dst.OutputDir = resolveOutputDir(dst)
 			dst.Envs["DRONE_OUTPUT_DIR"] = dst.OutputDir
-			dst.Volumes = append(dst.Volumes, outputMount)
 		}
 		dst.Labels = stageLabels
 		setupScript(src, dst, osVal)
@@ -388,10 +444,9 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		dst.Envs = environ.Combine(envs, dst.Envs)
 		dst.Volumes = append(dst.Volumes, mount)
 		dst.Volumes = append(dst.Volumes, helperMounts...)
-		if outputMount.Name != "" {
-			dst.OutputDir = "/drone/outputs/" + dst.Name
+		if helperEnabled {
+			dst.OutputDir = resolveOutputDir(dst)
 			dst.Envs["DRONE_OUTPUT_DIR"] = dst.OutputDir
-			dst.Volumes = append(dst.Volumes, outputMount)
 		}
 		dst.Labels = stageLabels
 		setupScript(src, dst, osVal)
@@ -554,8 +609,30 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		}))
 	}
 
+	if sharedOutputRoot != "" {
+		for _, step := range spec.Steps {
+			id := random()
+			hostPath := filepath.Join(outputHostBase, filepath.Base(sharedOutputRoot), step.Name)
+			containerPath := stdpath.Join(sharedOutputRoot, step.Name)
+			spec.Volumes = append(spec.Volumes, &engine.Volume{
+				HostPath: &engine.VolumeHostPath{
+					ID:   id,
+					Name: id,
+					Path: hostPath,
+				},
+			})
+			step.Volumes = append(step.Volumes, &engine.VolumeMount{
+				Name: id,
+				Path: containerPath,
+			})
+		}
+	}
+
 	// append global volumes to the steps.
 	for k, v := range c.Volumes {
+		if strings.TrimSuffix(v, ":ro") == "/drone/outputs" {
+			continue
+		}
 		id := random()
 		ro := strings.HasSuffix(v, ":ro")
 		v = strings.TrimSuffix(v, ":ro")

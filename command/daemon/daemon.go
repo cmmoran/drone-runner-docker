@@ -6,7 +6,6 @@ package daemon
 
 import (
 	"context"
-	"os"
 	"time"
 
 	"github.com/drone-runners/drone-runner-docker/engine"
@@ -15,6 +14,7 @@ import (
 	"github.com/drone-runners/drone-runner-docker/engine/resource"
 	"github.com/drone-runners/drone-runner-docker/internal/match"
 	"github.com/drone-runners/drone-runner-docker/internal/outputexec"
+	"github.com/drone-runners/drone-runner-docker/version"
 
 	"github.com/drone/runner-go/client"
 	"github.com/drone/runner-go/environ/provider"
@@ -56,6 +56,9 @@ func (c *daemonCommand) run(*kingpin.ParseContext) error {
 
 	// setup the global logrus logger.
 	setupLogger(config)
+	logrus.WithField("version", version.Version).
+		WithField("mode", "daemon").
+		Infoln("starting drone-runner-docker")
 
 	ctx, cancel := context.WithCancel(nocontext)
 	defer cancel()
@@ -116,7 +119,13 @@ func (c *daemonCommand) run(*kingpin.ParseContext) error {
 	tracer := history.New(remote)
 	hook := loghistory.New()
 	logrus.AddHook(hook)
-	executablePath, _ := os.Executable()
+	var executablePath string
+	if config.Runner.Image == "" {
+		executablePath, err = installOutputHelper()
+		if err != nil {
+			return err
+		}
+	}
 
 	runner := &runtime.Runner{
 		Client:   cli,
@@ -184,6 +193,7 @@ func (c *daemonCommand) run(*kingpin.ParseContext) error {
 				),
 			),
 			ExecutablePath: executablePath,
+			HelperImage:    config.Runner.Image,
 		},
 		Exec: outputexec.New(
 			tracer,

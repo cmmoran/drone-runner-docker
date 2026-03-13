@@ -9,12 +9,10 @@ import (
 	"os"
 
 	"github.com/drone-runners/drone-runner-docker/command/daemon"
+	"github.com/drone-runners/drone-runner-docker/version"
 
 	"gopkg.in/alecthomas/kingpin.v2"
 )
-
-// program version
-var version = "0.0.0"
 
 // empty context
 var nocontext = context.Background()
@@ -29,6 +27,6 @@ func Command() {
 	registerOutput(app)
 	daemon.Register(app)
 
-	kingpin.Version(version)
+	kingpin.Version(version.Version)
 	kingpin.MustParse(app.Parse(normalizeOutputInvocation(os.Args)))
 }

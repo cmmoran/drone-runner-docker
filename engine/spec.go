@@ -17,12 +17,13 @@ type (
 	// required instructions for reproducible pipeline
 	// execution.
 	Spec struct {
-		Platform  Platform  `json:"platform,omitempty"`
-		Steps     []*Step   `json:"steps,omitempty"`
-		Internal  []*Step   `json:"internal,omitempty"`
-		Volumes   []*Volume `json:"volumes,omitempty"`
-		Network   Network   `json:"network"`
-		OutputDir string    `json:"output_dir,omitempty"`
+		Platform    Platform  `json:"platform,omitempty"`
+		Steps       []*Step   `json:"steps,omitempty"`
+		Internal    []*Step   `json:"internal,omitempty"`
+		Volumes     []*Volume `json:"volumes,omitempty"`
+		Network     Network   `json:"network"`
+		OutputDir   string    `json:"output_dir,omitempty"`
+		HelperImage string    `json:"helper_image,omitempty"`
 	}
 
 	// Step defines a pipeline step.
