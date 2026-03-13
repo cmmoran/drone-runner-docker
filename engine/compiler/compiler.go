@@ -6,6 +6,7 @@ package compiler
 
 import (
 	"context"
+	"fmt"
 	"os"
 	stdpath "path"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 	"github.com/drone-runners/drone-runner-docker/engine"
 	"github.com/drone-runners/drone-runner-docker/engine/resource"
 	"github.com/drone-runners/drone-runner-docker/internal/docker/image"
+	"github.com/drone-runners/drone-runner-docker/internal/outputservice"
+	"github.com/drone-runners/drone-runner-docker/internal/outputtransport"
 
 	"github.com/drone/drone-go/drone"
 	"github.com/drone/runner-go/clone"
@@ -133,6 +136,18 @@ type Compiler struct {
 	// HelperImage is the runner image used to copy the helper
 	// binary into a shared volume for containerized runners.
 	HelperImage string
+
+	// OutputService is the optional IPC-backed output service.
+	OutputService *outputservice.Service
+
+	// OutputTransport configures output transport selection.
+	OutputTransport string
+
+	// OutputSocketRoot is the shared root used for unix sockets.
+	OutputSocketRoot string
+
+	// OutputHTTPURL is the advertised HTTP endpoint for output IPC.
+	OutputHTTPURL string
 }
 
 // Compile compiles the configuration file.
@@ -211,6 +226,8 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		},
 		Volumes: []*engine.Volume{volume},
 	}
+	pipelineID := fmt.Sprintf("%d/%d/%d", args.Repo.ID, args.Build.ID, args.Stage.ID)
+	spec.PipelineID = pipelineID
 
 	// list the global environment variables
 	globals, _ := c.Environ.List(ctx, &provider.Request{
@@ -258,6 +275,22 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		}
 	}
 	sharedOutputRoot := ""
+	outputMode := strings.ToLower(strings.TrimSpace(c.OutputTransport))
+	if outputMode == "" {
+		outputMode = "file"
+	}
+	if outputMode == "auto" {
+		switch {
+		case c.OutputService != nil && c.OutputSocketRoot != "" && outputHostBase != "":
+			outputMode = "unix"
+		case c.OutputService != nil && c.OutputHTTPURL != "":
+			outputMode = "http"
+		default:
+			outputMode = "file"
+		}
+	}
+	spec.OutputTransport = outputMode
+	stepTokens := map[string]string{}
 	resolveOutputDir := func(step *engine.Step) string {
 		if sharedOutputRoot != "" {
 			return stdpath.Join(sharedOutputRoot, step.Name)
@@ -329,15 +362,37 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		}
 	}
 	if helperEnabled {
-		if outputHostBase != "" {
-			if info, err := os.Stat("/drone/outputs"); err == nil && info.IsDir() {
-				sharedOutputRoot = stdpath.Join("/drone/outputs", random())
+		switch outputMode {
+		case "unix":
+			if outputHostBase != "" && c.OutputSocketRoot != "" {
+				sharedOutputRoot = stdpath.Join(c.OutputSocketRoot, random())
+				spec.OutputDir = sharedOutputRoot
+				socketPath := stdpath.Join(sharedOutputRoot, "outputs.sock")
+				closer, err := outputtransport.ListenUnix(socketPath, c.OutputService)
+				if err == nil {
+					spec.OutputCloser = closer
+				} else {
+					outputMode = "file"
+					spec.OutputTransport = outputMode
+				}
+			} else {
+				outputMode = "file"
+				spec.OutputTransport = outputMode
 			}
+		case "http":
+			spec.OutputDir = ""
 		}
-		if sharedOutputRoot != "" {
-			spec.OutputDir = sharedOutputRoot
-		} else {
-			spec.OutputDir = outputRoot
+		if outputMode == "file" {
+			if outputHostBase != "" {
+				if info, err := os.Stat("/drone/outputs"); err == nil && info.IsDir() {
+					sharedOutputRoot = stdpath.Join("/drone/outputs", random())
+				}
+			}
+			if sharedOutputRoot != "" {
+				spec.OutputDir = sharedOutputRoot
+			} else {
+				spec.OutputDir = outputRoot
+			}
 		}
 	}
 
@@ -370,6 +425,23 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		Branch:   args.Build.Target,
 	}
 
+	if c.OutputService != nil && outputMode != "file" {
+		stepNames := []string{}
+		if pipeline.Clone.Disable == false {
+			stepNames = append(stepNames, "clone")
+		}
+		for _, src := range pipeline.Services {
+			stepNames = append(stepNames, src.Name)
+		}
+		for _, src := range pipeline.Steps {
+			stepNames = append(stepNames, src.Name)
+		}
+		for _, name := range stepNames {
+			stepTokens[name] = random()
+		}
+		c.OutputService.RegisterPipeline(pipelineID, stepTokens)
+	}
+
 	// create the clone step
 	if pipeline.Clone.Disable == false {
 		step := createClone(pipeline)
@@ -380,9 +452,12 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		step.Pull = engine.PullIfNotExists
 		step.Volumes = append(step.Volumes, mount)
 		step.Volumes = append(step.Volumes, helperMounts...)
-		if helperEnabled {
+		if helperEnabled && outputMode == "file" {
 			step.OutputDir = resolveOutputDir(step)
 			step.Envs["DRONE_OUTPUT_DIR"] = step.OutputDir
+		}
+		if helperEnabled && outputMode != "file" {
+			injectOutputTransport(step, outputMode, stepTokens[step.Name], stdpath.Join(sharedOutputRoot, "outputs.sock"), c.OutputHTTPURL)
 		}
 		spec.Steps = append(spec.Steps, step)
 
@@ -415,9 +490,12 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		dst.Envs = environ.Combine(envs, dst.Envs)
 		dst.Volumes = append(dst.Volumes, mount)
 		dst.Volumes = append(dst.Volumes, helperMounts...)
-		if helperEnabled {
+		if helperEnabled && outputMode == "file" {
 			dst.OutputDir = resolveOutputDir(dst)
 			dst.Envs["DRONE_OUTPUT_DIR"] = dst.OutputDir
+		}
+		if helperEnabled && outputMode != "file" {
+			injectOutputTransport(dst, outputMode, stepTokens[dst.Name], stdpath.Join(sharedOutputRoot, "outputs.sock"), c.OutputHTTPURL)
 		}
 		dst.Labels = stageLabels
 		setupScript(src, dst, osVal)
@@ -444,9 +522,12 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		dst.Envs = environ.Combine(envs, dst.Envs)
 		dst.Volumes = append(dst.Volumes, mount)
 		dst.Volumes = append(dst.Volumes, helperMounts...)
-		if helperEnabled {
+		if helperEnabled && outputMode == "file" {
 			dst.OutputDir = resolveOutputDir(dst)
 			dst.Envs["DRONE_OUTPUT_DIR"] = dst.OutputDir
+		}
+		if helperEnabled && outputMode != "file" {
+			injectOutputTransport(dst, outputMode, stepTokens[dst.Name], stdpath.Join(sharedOutputRoot, "outputs.sock"), c.OutputHTTPURL)
 		}
 		dst.Labels = stageLabels
 		setupScript(src, dst, osVal)
@@ -609,7 +690,7 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		}))
 	}
 
-	if sharedOutputRoot != "" {
+	if sharedOutputRoot != "" && outputMode == "file" {
 		for _, step := range spec.Steps {
 			id := random()
 			hostPath := filepath.Join(outputHostBase, filepath.Base(sharedOutputRoot), step.Name)
@@ -624,6 +705,23 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 			step.Volumes = append(step.Volumes, &engine.VolumeMount{
 				Name: id,
 				Path: containerPath,
+			})
+		}
+	}
+	if sharedOutputRoot != "" && outputMode == "unix" {
+		for _, step := range spec.Steps {
+			id := random()
+			hostPath := filepath.Join(outputHostBase, filepath.Base(sharedOutputRoot))
+			spec.Volumes = append(spec.Volumes, &engine.Volume{
+				HostPath: &engine.VolumeHostPath{
+					ID:   id,
+					Name: id,
+					Path: hostPath,
+				},
+			})
+			step.Volumes = append(step.Volumes, &engine.VolumeMount{
+				Name: id,
+				Path: sharedOutputRoot,
 			})
 		}
 	}
@@ -758,4 +856,22 @@ func (c *Compiler) findSecret(ctx context.Context, args runtime.CompilerArgs, na
 		return
 	}
 	return found.Data, true
+}
+
+func injectOutputTransport(step *engine.Step, mode, token, socketPath, httpURL string) {
+	if step.Envs == nil {
+		step.Envs = map[string]string{}
+	}
+	step.Envs["DRONE_OUTPUT_TRANSPORT"] = mode
+	step.Envs["DRONE_OUTPUT_TOKEN"] = token
+	switch mode {
+	case "unix":
+		step.Envs["DRONE_OUTPUT_SOCKET"] = socketPath
+		delete(step.Envs, "DRONE_OUTPUT_URL")
+		delete(step.Envs, "DRONE_OUTPUT_DIR")
+	case "http":
+		step.Envs["DRONE_OUTPUT_URL"] = httpURL
+		delete(step.Envs, "DRONE_OUTPUT_SOCKET")
+		delete(step.Envs, "DRONE_OUTPUT_DIR")
+	}
 }

@@ -350,6 +350,7 @@ func testCompile(t *testing.T, source, golden string) *engine.Spec {
 
 	opts := cmp.Options{
 		cmpopts.IgnoreUnexported(engine.Spec{}),
+		cmpopts.IgnoreFields(engine.Spec{}, "OutputTransport", "PipelineID", "OutputCloser"),
 		cmpopts.IgnoreFields(engine.Step{}, "Envs", "Secrets", "Labels"),
 		cmpopts.IgnoreFields(engine.Network{}, "Labels"),
 		cmpopts.IgnoreFields(engine.VolumeEmptyDir{}, "Labels"),

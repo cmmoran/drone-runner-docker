@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/drone-runners/drone-runner-docker/engine"
+	"github.com/drone-runners/drone-runner-docker/internal/outputservice"
 	"github.com/drone-runners/drone-runner-docker/internal/stepoutput"
 
 	"github.com/drone/drone-go/drone"
@@ -29,6 +30,7 @@ type Execer struct {
 	streamer pipeline.Streamer
 	uploader pipeline.Uploader
 	sem      *semaphore.Weighted
+	service  *outputservice.Service
 
 	mu      sync.RWMutex
 	outputs map[string]map[string]string
@@ -40,12 +42,14 @@ func New(
 	uploader pipeline.Uploader,
 	engine runtime.Engine,
 	threads int64,
+	service *outputservice.Service,
 ) *Execer {
 	exec := &Execer{
 		reporter: reporter,
 		streamer: streamer,
 		engine:   engine,
 		uploader: uploader,
+		service:  service,
 		outputs:  map[string]map[string]string{},
 	}
 	if threads > 0 {
@@ -58,6 +62,14 @@ func (e *Execer) Exec(ctx context.Context, spec runtime.Spec, state *pipeline.St
 	log := logger.FromContext(ctx)
 	defer func() {
 		log.Debugln("destroying the pipeline environment")
+		if engineSpec, ok := spec.(*engine.Spec); ok {
+			if engineSpec.OutputCloser != nil {
+				_ = engineSpec.OutputCloser.Close()
+			}
+			if e.service != nil && engineSpec.PipelineID != "" {
+				e.service.DeletePipeline(engineSpec.PipelineID)
+			}
+		}
 		if err := e.engine.Destroy(noContext, spec); err != nil {
 			log.WithError(err).Debugln("cannot destroy the pipeline environment")
 		}
@@ -172,7 +184,7 @@ func (e *Execer) exec(ctx context.Context, state *pipeline.State, spec runtime.S
 
 	engineStep, ok := copy.(*engine.Step)
 	if ok {
-		if err := e.injectOutputs(engineStep); err != nil {
+		if err := e.injectOutputs(spec.(*engine.Spec), engineStep); err != nil {
 			state.Fail(step.GetName(), err)
 			_ = e.reporter.ReportStep(noContext, state, step.GetName())
 			return err
@@ -215,7 +227,7 @@ func (e *Execer) exec(ctx context.Context, state *pipeline.State, spec runtime.S
 			result = multierror.Append(result, err)
 		}
 		if exited.ExitCode == 0 {
-			if engineStep, ok := copy.(*engine.Step); ok && engineStep.OutputDir != "" {
+			if engineStep, ok := copy.(*engine.Step); ok && engineStep.OutputDir != "" && spec.(*engine.Spec).OutputTransport == "file" {
 				if err := e.collectOutputs(spec.(*engine.Spec), engineStep); err != nil {
 					state.Fail(step.GetName(), err)
 					_ = e.reporter.ReportStep(noContext, state, step.GetName())
@@ -240,12 +252,23 @@ func (e *Execer) exec(ctx context.Context, state *pipeline.State, spec runtime.S
 	return result
 }
 
-func (e *Execer) injectOutputs(step *engine.Step) error {
+func (e *Execer) injectOutputs(spec *engine.Spec, step *engine.Step) error {
 	if len(step.OutputEnvs) == 0 {
 		return nil
 	}
 	resolved := map[string]string{}
 	for envName, ref := range step.OutputEnvs {
+		if e.service != nil && spec.PipelineID != "" && spec.OutputTransport != "file" {
+			value, ok, err := e.service.Resolve(spec.PipelineID, ref.Step, ref.Key)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("missing outputs from step %q", ref.Step)
+			}
+			resolved[envName] = value
+			continue
+		}
 		e.mu.RLock()
 		values := e.outputs[ref.Step]
 		e.mu.RUnlock()

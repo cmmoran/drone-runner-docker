@@ -23,7 +23,8 @@ func TestExec_PropagatesStepOutputs(t *testing.T) {
 	defer os.RemoveAll(outputDir)
 
 	spec := &engine.Spec{
-		OutputDir: outputDir,
+		OutputDir:       outputDir,
+		OutputTransport: "file",
 		Steps: []*engine.Step{
 			{
 				Name:      "build",
@@ -55,7 +56,7 @@ func TestExec_PropagatesStepOutputs(t *testing.T) {
 	}
 
 	fake := &fakeEngine{}
-	exec := New(pipeline.NopReporter(), pipeline.NopStreamer(), pipeline.NopUploader(), fake, 0)
+	exec := New(pipeline.NopReporter(), pipeline.NopStreamer(), pipeline.NopUploader(), fake, 0, nil)
 	if err := exec.Exec(context.Background(), spec, state); err != nil {
 		t.Fatal(err)
 	}

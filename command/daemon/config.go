@@ -7,6 +7,7 @@ package daemon
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/cmmoran/envconfig"
 	"github.com/joho/godotenv"
@@ -116,6 +117,14 @@ type Config struct {
 		RSA            string `envconfig:"DRONE_TMATE_FINGERPRINT_RSA"`
 		ED25519        string `envconfig:"DRONE_TMATE_FINGERPRINT_ED25519"`
 		AuthorizedKeys string `envconfig:"DRONE_TMATE_AUTHORIZED_KEYS"`
+	}
+
+	Output struct {
+		Transport     string        `envconfig:"DRONE_OUTPUT_TRANSPORT" default:"file"`
+		SocketRoot    string        `envconfig:"DRONE_OUTPUT_SOCKET_ROOT" default:"/drone/outputs"`
+		HTTPBind      string        `envconfig:"DRONE_OUTPUT_HTTP_BIND"`
+		HTTPAdvertise string        `envconfig:"DRONE_OUTPUT_HTTP_ADVERTISE"`
+		TTL           time.Duration `envconfig:"DRONE_OUTPUT_TTL" default:"72h"`
 	}
 }
 

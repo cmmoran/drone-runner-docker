@@ -5,11 +5,16 @@
 package daemon
 
 import (
+	"context"
+	"net/http"
+
 	"github.com/drone-runners/drone-runner-docker/engine"
 	"github.com/drone-runners/drone-runner-docker/engine/compiler"
 	"github.com/drone-runners/drone-runner-docker/engine/linter"
 	"github.com/drone-runners/drone-runner-docker/engine/resource"
 	"github.com/drone-runners/drone-runner-docker/internal/outputexec"
+	"github.com/drone-runners/drone-runner-docker/internal/outputservice"
+	"github.com/drone-runners/drone-runner-docker/internal/outputtransport"
 	"github.com/drone-runners/drone-runner-docker/version"
 	"github.com/drone/runner-go/pipeline/uploader"
 
@@ -69,6 +74,8 @@ func (c *processCommand) run(*kingpin.ParseContext) error {
 
 	remote := remote.New(cli)
 	upload := uploader.New(cli)
+	outputSvc := outputservice.New(config.Output.TTL)
+	defer outputSvc.Close()
 	var executablePath string
 	if config.Runner.Image == "" {
 		executablePath, err = installOutputHelper()
@@ -128,8 +135,12 @@ func (c *processCommand) run(*kingpin.ParseContext) error {
 					config.Secret.SkipVerify,
 				),
 			),
-			ExecutablePath: executablePath,
-			HelperImage:    config.Runner.Image,
+			ExecutablePath:   executablePath,
+			HelperImage:      config.Runner.Image,
+			OutputService:    outputSvc,
+			OutputTransport:  config.Output.Transport,
+			OutputSocketRoot: config.Output.SocketRoot,
+			OutputHTTPURL:    config.Output.HTTPAdvertise,
 		},
 		Exec: outputexec.New(
 			remote,
@@ -137,7 +148,20 @@ func (c *processCommand) run(*kingpin.ParseContext) error {
 			upload,
 			engine,
 			config.Runner.Procs,
+			outputSvc,
 		).Exec,
+	}
+
+	var outputServer *http.Server
+	if config.Output.HTTPBind != "" {
+		outputServer = &http.Server{
+			Addr:    config.Output.HTTPBind,
+			Handler: outputtransport.NewHTTPHandler(outputSvc),
+		}
+		go func() {
+			_ = outputServer.ListenAndServe()
+		}()
+		defer outputServer.Shutdown(context.Background())
 	}
 
 	err = runner.RunAccepted(nocontext, c.stage)

@@ -5,6 +5,8 @@
 package engine
 
 import (
+	"io"
+
 	"github.com/drone/runner-go/environ"
 	"github.com/drone/runner-go/pipeline/runtime"
 
@@ -17,13 +19,16 @@ type (
 	// required instructions for reproducible pipeline
 	// execution.
 	Spec struct {
-		Platform    Platform  `json:"platform,omitempty"`
-		Steps       []*Step   `json:"steps,omitempty"`
-		Internal    []*Step   `json:"internal,omitempty"`
-		Volumes     []*Volume `json:"volumes,omitempty"`
-		Network     Network   `json:"network"`
-		OutputDir   string    `json:"output_dir,omitempty"`
-		HelperImage string    `json:"helper_image,omitempty"`
+		Platform        Platform  `json:"platform,omitempty"`
+		Steps           []*Step   `json:"steps,omitempty"`
+		Internal        []*Step   `json:"internal,omitempty"`
+		Volumes         []*Volume `json:"volumes,omitempty"`
+		Network         Network   `json:"network"`
+		OutputDir       string    `json:"output_dir,omitempty"`
+		OutputTransport string    `json:"output_transport,omitempty"`
+		PipelineID      string    `json:"pipeline_id,omitempty"`
+		HelperImage     string    `json:"helper_image,omitempty"`
+		OutputCloser    io.Closer `json:"-"`
 	}
 
 	// Step defines a pipeline step.

@@ -6,6 +6,7 @@ package daemon
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/drone-runners/drone-runner-docker/engine"
@@ -14,6 +15,8 @@ import (
 	"github.com/drone-runners/drone-runner-docker/engine/resource"
 	"github.com/drone-runners/drone-runner-docker/internal/match"
 	"github.com/drone-runners/drone-runner-docker/internal/outputexec"
+	"github.com/drone-runners/drone-runner-docker/internal/outputservice"
+	"github.com/drone-runners/drone-runner-docker/internal/outputtransport"
 	"github.com/drone-runners/drone-runner-docker/version"
 
 	"github.com/drone/runner-go/client"
@@ -119,6 +122,8 @@ func (c *daemonCommand) run(*kingpin.ParseContext) error {
 	tracer := history.New(remote)
 	hook := loghistory.New()
 	logrus.AddHook(hook)
+	outputSvc := outputservice.New(config.Output.TTL)
+	defer outputSvc.Close()
 	var executablePath string
 	if config.Runner.Image == "" {
 		executablePath, err = installOutputHelper()
@@ -192,8 +197,12 @@ func (c *daemonCommand) run(*kingpin.ParseContext) error {
 					config.Secret.SkipVerify,
 				),
 			),
-			ExecutablePath: executablePath,
-			HelperImage:    config.Runner.Image,
+			ExecutablePath:   executablePath,
+			HelperImage:      config.Runner.Image,
+			OutputService:    outputSvc,
+			OutputTransport:  config.Output.Transport,
+			OutputSocketRoot: config.Output.SocketRoot,
+			OutputHTTPURL:    config.Output.HTTPAdvertise,
 		},
 		Exec: outputexec.New(
 			tracer,
@@ -201,6 +210,7 @@ func (c *daemonCommand) run(*kingpin.ParseContext) error {
 			upload,
 			engine,
 			config.Runner.Procs,
+			outputSvc,
 		).Exec,
 	}
 
@@ -234,6 +244,23 @@ func (c *daemonCommand) run(*kingpin.ParseContext) error {
 	g.Go(func() error {
 		return server.ListenAndServe(ctx)
 	})
+
+	if config.Output.HTTPBind != "" {
+		outputServer := &http.Server{
+			Addr:    config.Output.HTTPBind,
+			Handler: outputtransport.NewHTTPHandler(outputSvc),
+		}
+		g.Go(func() error {
+			go func() {
+				<-ctx.Done()
+				_ = outputServer.Shutdown(context.Background())
+			}()
+			if err := outputServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				return err
+			}
+			return nil
+		})
+	}
 
 	// Ping the server and block until a successful connection
 	// to the server has been established.
