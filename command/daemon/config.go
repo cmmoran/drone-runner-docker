@@ -120,7 +120,7 @@ type Config struct {
 	}
 
 	Output struct {
-		Transport     string        `envconfig:"DRONE_OUTPUT_TRANSPORT" default:"file"`
+		Transport     string        `envconfig:"DRONE_OUTPUT_TRANSPORT" default:"auto"`
 		SocketRoot    string        `envconfig:"DRONE_OUTPUT_SOCKET_ROOT" default:"/drone/outputs"`
 		HTTPBind      string        `envconfig:"DRONE_OUTPUT_HTTP_BIND"`
 		HTTPAdvertise string        `envconfig:"DRONE_OUTPUT_HTTP_ADVERTISE"`

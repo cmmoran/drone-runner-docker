@@ -31,7 +31,7 @@ Current transport modes:
 - `DRONE_OUTPUT_TRANSPORT=unix`
 - `DRONE_OUTPUT_TRANSPORT=http`
 
-Recommended rollout remains `file` until IPC is explicitly enabled and tested.
+Default runner behavior is now `auto`.
 
 ### Unix Mode
 
