@@ -395,6 +395,10 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 			}
 		}
 	}
+	if !helperEnabled {
+		outputMode = "file"
+		spec.OutputTransport = outputMode
+	}
 
 	// create tmate variables
 	if c.Tmate.Server != "" {
@@ -425,7 +429,7 @@ func (c *Compiler) Compile(ctx context.Context, args runtime.CompilerArgs) runti
 		Branch:   args.Build.Target,
 	}
 
-	if c.OutputService != nil && outputMode != "file" {
+	if helperEnabled && c.OutputService != nil && outputMode != "file" {
 		stepNames := []string{}
 		if pipeline.Clone.Disable == false {
 			stepNames = append(stepNames, "clone")

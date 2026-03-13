@@ -131,6 +131,9 @@ func (*fakeEngine) Destroy(context.Context, runtime.Spec) error { return nil }
 func (f *fakeEngine) Run(_ context.Context, spec runtime.Spec, step runtime.Step, _ io.Writer) (*runtime.State, error) {
 	engineStep := step.(*engine.Step)
 	if engineStep.Name == "build" {
+		if spec.(*engine.Spec).OutputTransport != "file" {
+			return &runtime.State{Exited: true, ExitCode: 0}, nil
+		}
 		dir := engineStep.OutputDir
 		if dir == "" {
 			dir = filepath.Join(spec.(*engine.Spec).OutputDir, "build")

@@ -378,6 +378,65 @@ steps:
 	}
 }
 
+func TestCompile_OutputTransportFallsBackWithoutHelper(t *testing.T) {
+	svc := outputservice.New(0)
+	defer svc.Close()
+
+	raw := `
+kind: pipeline
+type: docker
+name: default
+
+steps:
+  - name: publish
+    image: alpine
+`
+	mfst, err := manifest.ParseString(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	compiler := &Compiler{
+		Environ:         provider.Static(nil),
+		Registry:        registry.Static(nil),
+		Secret:          secret.Static(nil),
+		OutputService:   svc,
+		OutputTransport: "http",
+		OutputHTTPURL:   "http://runner.internal:3001/outputs",
+	}
+	args := runtime.CompilerArgs{
+		Repo:     &drone.Repo{ID: 1},
+		Build:    &drone.Build{ID: 2},
+		Stage:    &drone.Stage{ID: 3},
+		System:   &drone.System{},
+		Netrc:    &drone.Netrc{},
+		Manifest: mfst,
+		Pipeline: mfst.Resources[0].(*resource.Pipeline),
+		Secret:   secret.Static(nil),
+	}
+
+	ir := compiler.Compile(nocontext, args).(*engine.Spec)
+	if got, want := ir.OutputTransport, "file"; got != want {
+		t.Fatalf("want output transport %q, got %q", want, got)
+	}
+	var publish *engine.Step
+	for _, step := range ir.Steps {
+		if step.Name == "publish" {
+			publish = step
+			break
+		}
+	}
+	if publish == nil {
+		t.Fatal("publish step not found")
+	}
+	if got := publish.Envs["DRONE_OUTPUT_TRANSPORT"]; got != "" {
+		t.Fatalf("did not expect DRONE_OUTPUT_TRANSPORT without helper, got %q", got)
+	}
+	if got := publish.Envs["DRONE_OUTPUT_TOKEN"]; got != "" {
+		t.Fatalf("did not expect DRONE_OUTPUT_TOKEN without helper, got %q", got)
+	}
+}
+
 // This test verifies that step labels are generated correctly
 func TestCompile_StepLabels(t *testing.T) {
 	manifest, _ := manifest.ParseFile("testdata/steps.yml")
